@@ -13,7 +13,21 @@
       content: '';
       position: absolute;
       inset: 0;
-      background-image: repeating-linear-gradient(var(--hatch-angle, 25deg), rgba(40,40,40,0.05) 0px, rgba(40,40,40,0.05) 2px, rgba(255,255,255,0.05) 2px, rgba(255,255,255,0.05) 6px);
+      background-image:
+        repeating-linear-gradient(
+          var(--hatch-angle, 30deg),
+          rgba(35, 35, 35, 0.14) 0px,
+          rgba(35, 35, 35, 0.14) 1px,
+          rgba(255, 255, 255, 0.0) 1px,
+          rgba(255, 255, 255, 0.0) 11px
+        ),
+        repeating-linear-gradient(
+          calc(var(--hatch-angle, 30deg) + 90deg),
+          rgba(35, 35, 35, 0.10) 0px,
+          rgba(35, 35, 35, 0.10) 1px,
+          rgba(255, 255, 255, 0.0) 1px,
+          rgba(255, 255, 255, 0.0) 11px
+        );
       pointer-events: none;
       z-index: 35;
       border-radius: 0.75rem;
@@ -181,7 +195,7 @@
 
       function computeQuestionSeconds(stem) {
         const words = String(stem || "").trim().split(/\s+/).filter(Boolean).length;
-        const secs = Math.ceil(words * 0.4 * 3);
+        const secs = Math.ceil(words * 0.6 * 3);
         return Math.min(45, Math.max(1, secs));
       }
 
