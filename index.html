@@ -527,7 +527,6 @@
 
           activateHardeners();
           startTimer(start.expiresAt);
-          requestFullscreenIfEnabled();
           state.route = "assessment";
           render();
         } catch (err) {
@@ -969,6 +968,7 @@
                 <div class="font-semibold truncate">${escapeHtml(state.session.identity.fullName)} | ${escapeHtml(state.config.title)}</div>
                 <div class="px-2 py-1 border rounded ${timerBadgeClass(state.timer.remainingMs)}">${fmt(state.timer.remainingMs)}</div>
                 <div>Question ${idx} of ${n}</div>
+                ${state.config.fullscreenEnforcement && !document.fullscreenElement ? `<button id="enterFsBtn" class="px-2 py-1 rounded bg-slate-700 text-white text-xs">Enter Fullscreen</button>` : ""}
               </div>
             </header>
 
@@ -1000,6 +1000,8 @@
           rerollHatchAngle();
           document.querySelectorAll("[data-option]").forEach(btn => btn.onclick = () => { state.selectedOptionId = btn.getAttribute("data-option"); render(); });
           document.getElementById("nextBtn").onclick = nextQuestion;
+          const fsBtn = document.getElementById("enterFsBtn");
+          if (fsBtn) fsBtn.onclick = () => requestFullscreenIfEnabled();
           const d = document.getElementById("dismissOverlay");
           if (d) d.onclick = () => { state.ui.overlay = null; render(); };
           const r = document.getElementById("resumeBtn");
