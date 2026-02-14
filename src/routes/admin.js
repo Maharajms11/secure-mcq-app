@@ -183,7 +183,7 @@ export default async function adminRoutes(fastify) {
          ON o.bank_code = q.bank_code
         AND o.question_id = q.id
        WHERE q.bank_code = $1
-       GROUP BY q.id
+       GROUP BY q.id, q.category, q.difficulty, q.stem, q.explanation, q.image
        ORDER BY q.id`,
       [bankCode]
     );
