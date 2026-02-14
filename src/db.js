@@ -3,8 +3,23 @@ import { config } from "./config.js";
 
 const { Pool } = pg;
 
+function buildConnectionString() {
+  const raw = config.databaseUrl;
+  try {
+    const u = new URL(raw);
+    const sslMode = (u.searchParams.get("sslmode") || "").toLowerCase();
+    // pg parser recently changed sslmode behavior; this keeps libpq-compatible "require" semantics.
+    if (sslMode === "require" && !u.searchParams.has("uselibpqcompat")) {
+      u.searchParams.set("uselibpqcompat", "true");
+    }
+    return u.toString();
+  } catch {
+    return raw;
+  }
+}
+
 export const pool = new Pool({
-  connectionString: config.databaseUrl,
+  connectionString: buildConnectionString(),
   ssl: config.dbSsl ? { rejectUnauthorized: config.dbSslRejectUnauthorized } : undefined
 });
 
