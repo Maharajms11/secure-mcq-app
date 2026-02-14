@@ -40,8 +40,8 @@ function buildPoolConfig() {
       ...base,
       host: u.hostname,
       port: Number(u.port || 5432),
-      user: decodeURIComponent(u.username || ""),
-      password: decodeURIComponent(u.password || ""),
+      user: u.username || "",
+      password: u.password || "",
       database
     };
   } catch {
