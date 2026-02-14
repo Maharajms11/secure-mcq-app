@@ -32,6 +32,18 @@
       z-index: 4;
       border-radius: 0.75rem;
     }
+    .ocr-grid-overlay {
+      position: absolute;
+      inset: 0;
+      border-radius: 0.75rem;
+      pointer-events: none;
+      z-index: 35;
+      background-image:
+        linear-gradient(30deg, rgba(20, 20, 20, 0.16) 1px, transparent 1px),
+        linear-gradient(120deg, rgba(20, 20, 20, 0.12) 1px, transparent 1px);
+      background-size: 14px 14px, 14px 14px;
+      mix-blend-mode: multiply;
+    }
     @media print {
       #app { display: none !important; }
       #print-blocked { display: block !important; }
@@ -1016,17 +1028,18 @@
               <section id="questionCard" class="assessment-block relative bg-white rounded-xl shadow p-4 md:p-6 overflow-hidden" style="--hatch-angle:${15 + Math.floor(Math.random() * 31)}deg;">
                 <canvas id="noiseCanvas" class="absolute inset-0 z-10 pointer-events-none"></canvas>
                 <canvas id="wmCanvas" class="absolute inset-0 z-20 pointer-events-none"></canvas>
+                <div class="ocr-grid-overlay"></div>
                 <div class="relative z-30">
                   ${q.image ? `<img alt='question image' src='${escapeHtml(q.image)}' class='mb-3 max-h-72 w-full object-contain rounded border' />` : ""}
                   <h2 class="text-xl md:text-2xl font-semibold leading-snug">${escapeHtml(q.stem)}</h2>
                   <div class="mt-4 space-y-2">
                     ${(q.options || []).map(d => `
-                      <button data-option="${escapeHtml(d.originalId)}" class="option-btn w-full text-left border rounded-lg px-4 py-3 bg-white/90 hover:bg-slate-50 ${state.selectedOptionId === d.originalId ? "border-blue-600 ring-2 ring-blue-200" : "border-gray-300"}">
+                      <button data-option="${escapeHtml(d.originalId)}" class="option-btn relative z-40 w-full text-left border rounded-lg px-4 py-3 bg-white/90 hover:bg-slate-50 ${state.selectedOptionId === d.originalId ? "border-blue-600 ring-2 ring-blue-200" : "border-gray-300"}">
                         <span class="font-semibold mr-2">${d.displayLabel}.</span>${escapeHtml(d.text)}
                       </button>
                     `).join("")}
                   </div>
-                  <button id="nextBtn" class="mt-5 w-full md:w-auto px-6 py-3 rounded font-semibold ${state.selectedOptionId ? "bg-blue-700 text-white" : "bg-gray-300 text-gray-600 cursor-not-allowed"}" ${state.selectedOptionId ? "" : "disabled"}>${idx === n ? "Submit" : "Next Question"}</button>
+                  <button id="nextBtn" class="relative z-40 mt-5 w-full md:w-auto px-6 py-3 rounded font-semibold ${state.selectedOptionId ? "bg-blue-700 text-white" : "bg-gray-300 text-gray-600 cursor-not-allowed"}" ${state.selectedOptionId ? "" : "disabled"}>${idx === n ? "Submit" : "Next Question"}</button>
                 </div>
               </section>
             </main>
@@ -1047,6 +1060,12 @@
               render();
             };
           }
+          document.querySelectorAll("[data-option]").forEach((btn) => {
+            btn.onclick = () => {
+              state.selectedOptionId = btn.getAttribute("data-option");
+              render();
+            };
+          });
           document.getElementById("nextBtn").onclick = () => nextQuestion(false);
           const fsBtn = document.getElementById("enterFsBtn");
           if (fsBtn) fsBtn.onclick = () => requestFullscreenIfEnabled();
