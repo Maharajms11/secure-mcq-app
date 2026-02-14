@@ -4,18 +4,7 @@ import { config } from "./config.js";
 const { Pool } = pg;
 
 function buildConnectionString() {
-  const raw = config.databaseUrl;
-  try {
-    const u = new URL(raw);
-    const sslMode = (u.searchParams.get("sslmode") || "").toLowerCase();
-    // pg parser recently changed sslmode behavior; this keeps libpq-compatible "require" semantics.
-    if (sslMode === "require" && !u.searchParams.has("uselibpqcompat")) {
-      u.searchParams.set("uselibpqcompat", "true");
-    }
-    return u.toString();
-  } catch {
-    return raw;
-  }
+  return config.databaseUrl;
 }
 
 function describeConnectionTarget(connectionString) {
@@ -65,6 +54,7 @@ const passwordDiagnostics = {
   looksLikePlaceholder: /\[YOUR-?PASSWORD\]/i.test(passwordValue)
 };
 console.log(`[db] target=${describeConnectionTarget(resolvedConnectionString)}`);
+console.log(`[db] pool_user=${poolConfig.user || "from_connection_string"}`);
 console.log(`[db] pg_env_overrides_present=${hasPgOverrides ? "yes" : "no"}`);
 console.log(`[db] password_diag=${JSON.stringify(passwordDiagnostics)}`);
 
