@@ -96,7 +96,7 @@
         selectedOptionId: null,
         currentQuestionIndex: 0,
         answers: [],
-        timer: { remainingMs: 0, startMs: 0, endMs: 0, warned10: false, warned2: false },
+        timer: { remainingMs: 0, startMs: 0, endMs: 0 },
         ui: { overlay: null, inactivityOverlay: false, submitted: false, submitting: false, zoomWarning: false }
       };
       state.activeAssessment = null;
@@ -458,8 +458,6 @@
         state.timer.startMs = now;
         state.timer.endMs = expiresAtIso ? new Date(expiresAtIso).getTime() : now + state.config.timeLimitMinutes * 60 * 1000;
         state.timer.remainingMs = state.timer.endMs - now;
-        state.timer.warned10 = false;
-        state.timer.warned2 = false;
 
         tickTimerId = setInterval(() => {
           if (!state.session || state.ui.submitted) return;
@@ -475,14 +473,6 @@
               nextQuestion(true);
               return;
             }
-          }
-          if (!state.timer.warned10 && remaining <= 10 * 60 * 1000) {
-            state.timer.warned10 = true;
-            alert("10 minute warning.");
-          }
-          if (!state.timer.warned2 && remaining <= 2 * 60 * 1000) {
-            state.timer.warned2 = true;
-            alert("2 minute warning.");
           }
           if (remaining === 0) {
             logViolation("timer_expired", "auto submit");
