@@ -33,6 +33,7 @@
       "use strict";
 
       const APP_TITLE = "Secure MCQ Assessment";
+      const API_BASE = localStorage.getItem("mcq_api_base") || "https://secure-mcq-app.onrender.com/api";
       const ADMIN_PASSWORD = "admin123";
       const DEFAULT_CONFIG = {
         title: APP_TITLE,
@@ -78,6 +79,9 @@
         timer: { remainingMs: 0, startMs: 0, endMs: 0, warned10: false, warned2: false },
         ui: { overlay: null, inactivityOverlay: false, submitted: false, submitting: false, zoomWarning: false }
       };
+      state.activeAssessment = null;
+      state.currentQuestionPayload = null;
+      state.currentResult = null;
 
       const app = document.getElementById("app");
       let tickTimerId = null;
@@ -104,6 +108,37 @@
 
       function saveJSON(key, value) {
         localStorage.setItem(key, JSON.stringify(value));
+      }
+
+      async function apiFetch(path, options = {}) {
+        const res = await fetch(`${API_BASE}${path}`, {
+          method: options.method || "GET",
+          headers: { "Content-Type": "application/json", ...(options.headers || {}) },
+          body: options.body ? JSON.stringify(options.body) : undefined
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          throw new Error(data.error || data.message || `api_error_${res.status}`);
+        }
+        return data;
+      }
+
+      async function loadActiveAssessment() {
+        try {
+          const active = await apiFetch("/assessment/active");
+          if (!active) return;
+          state.activeAssessment = active;
+          state.config.title = active.title || state.config.title;
+          state.config.timeLimitMinutes = Math.max(1, Math.round((Number(active.duration_seconds || 3600)) / 60));
+          state.config.drawCount = Number(active.draw_count || state.config.drawCount);
+          state.config.showPostReview = !!active.show_post_review;
+          state.config.fullscreenEnforcement = !!active.fullscreen_enforcement;
+          state.config.tabSwitchWarnThreshold = Number(active.tab_warn_threshold || state.config.tabSwitchWarnThreshold);
+          state.config.tabSwitchAutoSubmitThreshold = Number(active.tab_autosubmit_threshold || state.config.tabSwitchAutoSubmitThreshold);
+          state.config.allowRetakes = Number(active.allow_retakes || state.config.allowRetakes);
+        } catch {
+          // Keep local defaults when API metadata fetch fails.
+        }
       }
 
       function escapeHtml(s) {
@@ -194,6 +229,14 @@
           at: new Date().toISOString(),
           index: state.currentQuestionIndex + 1
         });
+        apiFetch(`/session/${state.session.token}/event`, {
+          method: "POST",
+          body: {
+            eventType: type,
+            details: details || "",
+            questionIndex: state.currentQuestionIndex
+          }
+        }).catch(() => {});
         render();
       }
 
@@ -348,10 +391,10 @@
         }
       }
 
-      function startTimer() {
+      function startTimer(expiresAtIso) {
         const now = Date.now();
         state.timer.startMs = now;
-        state.timer.endMs = now + state.config.timeLimitMinutes * 60 * 1000;
+        state.timer.endMs = expiresAtIso ? new Date(expiresAtIso).getTime() : now + state.config.timeLimitMinutes * 60 * 1000;
         state.timer.remainingMs = state.timer.endMs - now;
         state.timer.warned10 = false;
         state.timer.warned2 = false;
@@ -391,7 +434,7 @@
         });
       }
 
-      function startAssessment(identity) {
+      async function startAssessment(identity) {
         const id = sanitizeInput(identity.studentId);
         if ((state.exitedIds || []).includes(id)) {
           alert("This student ID is locked and cannot attempt this assessment again.");
@@ -403,95 +446,131 @@
           return;
         }
 
-        state.session = createSession({
-          fullName: sanitizeInput(identity.fullName),
-          studentId: id,
-          passcode: sanitizeInput(identity.passcode || "")
-        });
-        state.violations = [];
-        state.answers = [];
-        state.currentQuestionIndex = 0;
-        state.selectedOptionId = null;
-        state.ui.overlay = null;
-        state.ui.inactivityOverlay = false;
-        state.ui.submitted = false;
-        state.ui.submitting = false;
-        lastActivityAt = Date.now();
+        try {
+          const start = await apiFetch("/auth/start", {
+            method: "POST",
+            body: {
+              fullName: sanitizeInput(identity.fullName),
+              studentId: id,
+              assessmentCode: sanitizeInput(identity.assessmentCode || state.activeAssessment?.code || state.config.assessmentCode || ""),
+              passcode: sanitizeInput(identity.passcode || ""),
+              screenResolution: `${screen.width}x${screen.height}`
+            }
+          });
 
-        activateHardeners();
-        startTimer();
-        requestFullscreenIfEnabled();
-        state.route = "assessment";
-        render();
+          state.session = {
+            token: start.token,
+            seed: start.seed,
+            identity: {
+              fullName: sanitizeInput(identity.fullName),
+              studentId: id
+            },
+            startedAt: new Date(start.startedAt).getTime()
+          };
+
+          state.config.title = start.assessment?.title || state.config.title;
+          state.config.drawCount = Number(start.assessment?.drawCount || state.config.drawCount);
+          state.config.timeLimitMinutes = Math.max(1, Math.round((Number(start.assessment?.durationSeconds || 3600)) / 60));
+          state.config.showPostReview = !!start.assessment?.showPostReview;
+          state.config.fullscreenEnforcement = !!start.assessment?.fullscreenEnforcement;
+          state.config.tabSwitchWarnThreshold = Number(start.assessment?.tabWarnThreshold || state.config.tabSwitchWarnThreshold);
+          state.config.tabSwitchAutoSubmitThreshold = Number(start.assessment?.tabAutosubmitThreshold || state.config.tabSwitchAutoSubmitThreshold);
+          state.config.allowRetakes = Number(start.assessment?.allowRetakes || state.config.allowRetakes);
+
+          state.violations = [];
+          state.answers = [];
+          state.currentQuestionIndex = 0;
+          state.selectedOptionId = null;
+          state.currentQuestionPayload = null;
+          state.ui.overlay = null;
+          state.ui.inactivityOverlay = false;
+          state.ui.submitted = false;
+          state.ui.submitting = false;
+          lastActivityAt = Date.now();
+
+          const first = await apiFetch(`/session/${start.token}/question`);
+          state.currentQuestionPayload = first;
+          state.currentQuestionIndex = Number(first.questionIndex || 0);
+
+          activateHardeners();
+          startTimer(start.expiresAt);
+          requestFullscreenIfEnabled();
+          state.route = "assessment";
+          render();
+        } catch (err) {
+          alert(`Unable to start assessment: ${err.message}`);
+        }
       }
 
       function currentQuestion() {
-        if (!state.session) return null;
-        return state.session.questions[state.currentQuestionIndex] || null;
+        if (!state.currentQuestionPayload) return null;
+        return state.currentQuestionPayload.question || null;
       }
 
-      function nextQuestion() {
+      async function nextQuestion() {
         if (state.selectedOptionId == null) return;
         const q = currentQuestion();
         if (!q) return;
+        try {
+          const selected = state.selectedOptionId;
+          state.selectedOptionId = null;
+          render();
+          const response = await apiFetch(`/session/${state.session.token}/answer`, {
+            method: "POST",
+            body: {
+              questionId: q.id,
+              selectedOriginalId: selected
+            }
+          });
 
-        // Immutable answer append: prior answers are never edited.
-        state.answers = state.answers.concat([{ questionId: q.id, selectedOriginalId: state.selectedOptionId }]);
-        state.selectedOptionId = null;
+          if (response.done) {
+            state.currentResult = {
+              ...response.result,
+              violations: state.violations.slice(),
+              violationCount: state.violations.length
+            };
+            state.results = [state.currentResult].concat(state.results);
+            saveJSON("mcq_results", state.results);
+            const sid = state.session.identity.studentId;
+            state.attempts[sid] = Number(state.attempts[sid] || 0) + 1;
+            saveJSON("mcq_attempts", state.attempts);
+            state.ui.submitted = true;
+            state.ui.submitting = false;
+            stopTimer();
+            deactivateHardeners();
+            state.route = "results";
+            render();
+            return;
+          }
 
-        if (state.currentQuestionIndex >= state.session.questions.length - 1) {
-          submitAssessment(false);
-          return;
+          state.currentQuestionPayload = response.next;
+          state.currentQuestionIndex = Number(response.next?.questionIndex || state.currentQuestionIndex + 1);
+          if (Number.isFinite(Number(response.remainingMs))) {
+            state.timer.remainingMs = Math.max(0, Number(response.remainingMs));
+          }
+          rerollHatchAngle();
+          render();
+        } catch (err) {
+          alert(`Unable to submit answer: ${err.message}`);
+          render();
         }
-        state.currentQuestionIndex += 1;
-        rerollHatchAngle();
-        render();
       }
 
-      function submitAssessment(auto) {
+      async function submitAssessment(auto) {
         if (!state.session || state.ui.submitted || state.ui.submitting) return;
         state.ui.submitting = true;
         render();
-
-        setTimeout(() => {
-          const endMs = Date.now();
-          const total = state.session.questions.length;
-          let correct = 0;
-          const answerMap = new Map(state.answers.map(a => [a.questionId, a.selectedOriginalId]));
-          const details = state.session.questions.map((q) => {
-            const selectedId = answerMap.get(q.id) || null;
-            const selected = q.distractors.find(d => d.originalId === selectedId) || null;
-            const right = q.distractors.find(d => d.correct);
-            const isCorrect = !!selected && !!right && selected.originalId === right.originalId;
-            if (isCorrect) correct++;
-            return {
-              questionId: q.id,
-              stem: q.stem,
-              selected: selected ? selected.text : "Unanswered",
-              correct: right ? right.text : "N/A",
-              explanation: q.explanation,
-              isCorrect
-            };
+        try {
+          const response = await apiFetch(`/session/${state.session.token}/submit`, {
+            method: "POST",
+            body: { autoSubmitted: !!auto }
           });
-
-          const timeTakenMs = endMs - state.session.startedAt;
           const result = {
-            token: state.session.token,
-            seed: state.session.seed,
-            student: state.session.identity,
-            userAgent: state.session.userAgent,
-            screen: state.session.screen,
-            score: correct,
-            total,
-            percentage: Math.round((correct / total) * 100),
-            timeTakenMs,
+            ...(response.result || {}),
             violations: state.violations.slice(),
-            violationCount: state.violations.length,
-            submittedAt: new Date().toISOString(),
-            autoSubmitted: !!auto,
-            details
+            violationCount: state.violations.length
           };
-
+          state.currentResult = result;
           state.results = [result].concat(state.results);
           saveJSON("mcq_results", state.results);
 
@@ -505,7 +584,11 @@
           deactivateHardeners();
           state.route = "results";
           render();
-        }, 700);
+        } catch (err) {
+          state.ui.submitting = false;
+          alert(`Unable to submit assessment: ${err.message}`);
+          render();
+        }
       }
 
       function clearVisualTimers() {
@@ -782,6 +865,7 @@
         }
 
         if (state.route === "login") {
+          const noticeText = state.activeAssessment?.integrity_notice || INTEGRITY_NOTICE;
           app.innerHTML = `
             <div class="max-w-3xl mx-auto p-4 md:p-8 space-y-4">
               <div class="bg-white rounded-xl shadow p-5">
@@ -792,9 +876,10 @@
                 <h2 class="text-xl font-semibold">Identity Capture</h2>
                 <input id="fullName" class="w-full border rounded p-2" placeholder="Full Name">
                 <input id="studentId" class="w-full border rounded p-2" placeholder="Student/Employee ID">
-                <input id="passcode" class="w-full border rounded p-2" placeholder="Assessment Code (if required)">
+                <input id="assessmentCode" class="w-full border rounded p-2" placeholder="Assessment Code (default: ASSESS-2026)">
+                <input id="passcode" class="w-full border rounded p-2" placeholder="Assessment Passcode (if required)">
                 <label class="flex items-start gap-2 text-sm"><input id="honesty" type="checkbox" class="mt-1">I confirm I will complete this assessment honestly and without assistance.</label>
-                <pre class="whitespace-pre-wrap text-sm bg-gray-50 border rounded p-3">${escapeHtml(INTEGRITY_NOTICE)}</pre>
+                <pre class="whitespace-pre-wrap text-sm bg-gray-50 border rounded p-3">${escapeHtml(noticeText)}</pre>
                 <button id="toRules" class="w-full py-2 rounded bg-blue-700 text-white">Continue</button>
                 <a href="#/admin" class="text-blue-700 underline">Admin</a>
               </div>
@@ -803,6 +888,7 @@
           document.getElementById("toRules").onclick = () => {
             const fullName = sanitizeInput(document.getElementById("fullName").value);
             const studentId = sanitizeInput(document.getElementById("studentId").value);
+            const assessmentCode = sanitizeInput(document.getElementById("assessmentCode").value) || "ASSESS-2026";
             const passcode = sanitizeInput(document.getElementById("passcode").value);
             const honest = document.getElementById("honesty").checked;
 
@@ -810,11 +896,7 @@
               alert("Please complete all required fields and confirmation.");
               return;
             }
-            if (state.config.passcode && passcode !== state.config.passcode) {
-              alert("Invalid assessment code.");
-              return;
-            }
-            state.pendingIdentity = { fullName, studentId, passcode };
+            state.pendingIdentity = { fullName, studentId, assessmentCode, passcode };
             state.route = "rules";
             render();
           };
@@ -822,6 +904,7 @@
         }
 
         if (state.route === "rules") {
+          const noticeText = state.activeAssessment?.integrity_notice || INTEGRITY_NOTICE;
           app.innerHTML = `
             <div class="max-w-3xl mx-auto p-4 md:p-8">
               <div class="bg-white rounded-xl shadow p-6 space-y-4">
@@ -833,7 +916,7 @@
                   <li>No back navigation between questions</li>
                   <li>Anti-cheating monitoring and watermarking are active</li>
                 </ul>
-                <pre class="whitespace-pre-wrap text-sm bg-gray-50 border rounded p-3">${escapeHtml(INTEGRITY_NOTICE)}</pre>
+                <pre class="whitespace-pre-wrap text-sm bg-gray-50 border rounded p-3">${escapeHtml(noticeText)}</pre>
                 <button id="startAssessment" class="w-full py-3 rounded bg-green-700 text-white font-semibold">Start Assessment</button>
               </div>
             </div>
@@ -845,8 +928,8 @@
         if (state.route === "assessment" && state.session) {
           const q = currentQuestion();
           if (!q) return;
-          const n = state.session.questions.length;
-          const idx = state.currentQuestionIndex + 1;
+          const n = Number(state.currentQuestionPayload?.totalQuestions || state.config.drawCount || 0);
+          const idx = Number(state.currentQuestionPayload?.questionIndex || 0) + 1;
           app.innerHTML = `
             <header class="sticky top-0 z-40 border-b bg-white/95 backdrop-blur">
               <div class="max-w-5xl mx-auto px-3 py-2 flex items-center justify-between gap-2 text-sm">
@@ -865,7 +948,7 @@
                   ${q.image ? `<img alt='question image' src='${escapeHtml(q.image)}' class='mb-3 max-h-72 w-full object-contain rounded border' />` : ""}
                   <h2 class="text-xl md:text-2xl font-semibold leading-snug">${escapeHtml(q.stem)}</h2>
                   <div class="mt-4 space-y-2">
-                    ${q.distractors.map(d => `
+                    ${(q.options || []).map(d => `
                       <button data-option="${escapeHtml(d.originalId)}" class="option-btn w-full text-left border rounded-lg px-4 py-3 bg-white/90 hover:bg-slate-50 ${state.selectedOptionId === d.originalId ? "border-blue-600 ring-2 ring-blue-200" : "border-gray-300"}">
                         <span class="font-semibold mr-2">${d.displayLabel}.</span>${escapeHtml(d.text)}
                       </button>
@@ -989,7 +1072,7 @@
         URL.revokeObjectURL(url);
       }
 
-      render();
+      loadActiveAssessment().finally(() => render());
     })();
   </script>
 </body>
