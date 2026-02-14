@@ -29,7 +29,7 @@
           rgba(255, 255, 255, 0.0) 11px
         );
       pointer-events: none;
-      z-index: 35;
+      z-index: 4;
       border-radius: 0.75rem;
     }
     @media print {
@@ -196,7 +196,7 @@
       function computeQuestionSeconds(stem) {
         const words = String(stem || "").trim().split(/\s+/).filter(Boolean).length;
         const secs = Math.ceil(words * 0.6 * 3);
-        return Math.min(45, Math.max(1, secs));
+        return Math.min(45, Math.max(15, secs));
       }
 
       function beginQuestionTimer(question) {
@@ -1024,8 +1024,8 @@
             <main class="max-w-5xl mx-auto p-3 md:p-6 no-select">
               ${state.ui.zoomWarning ? `<div class='mb-3 p-3 rounded border bg-amber-50 border-amber-300 text-amber-800 text-sm'>Zoom appears not at 100%. Please reset browser zoom for optimal display.</div>` : ""}
               <section id="questionCard" class="assessment-block relative bg-white rounded-xl shadow p-4 md:p-6 overflow-hidden" style="--hatch-angle:${15 + Math.floor(Math.random() * 31)}deg;">
-                <canvas id="noiseCanvas" class="absolute inset-0 z-40 pointer-events-none"></canvas>
-                <canvas id="wmCanvas" class="absolute inset-0 z-50 pointer-events-none"></canvas>
+                <canvas id="noiseCanvas" class="absolute inset-0 z-10 pointer-events-none"></canvas>
+                <canvas id="wmCanvas" class="absolute inset-0 z-20 pointer-events-none"></canvas>
                 <div class="relative z-30">
                   ${q.image ? `<img alt='question image' src='${escapeHtml(q.image)}' class='mb-3 max-h-72 w-full object-contain rounded border' />` : ""}
                   <h2 class="text-xl md:text-2xl font-semibold leading-snug">${escapeHtml(q.stem)}</h2>
@@ -1047,8 +1047,17 @@
 
           startNoiseAndWatermark();
           rerollHatchAngle();
-          document.querySelectorAll("[data-option]").forEach(btn => btn.onclick = () => { state.selectedOptionId = btn.getAttribute("data-option"); render(); });
-          document.getElementById("nextBtn").onclick = nextQuestion;
+          // Robust option capture for full-row taps/clicks.
+          const questionCard = document.getElementById("questionCard");
+          if (questionCard) {
+            questionCard.onclick = (e) => {
+              const btn = e.target.closest("[data-option]");
+              if (!btn) return;
+              state.selectedOptionId = btn.getAttribute("data-option");
+              render();
+            };
+          }
+          document.getElementById("nextBtn").onclick = () => nextQuestion(false);
           const fsBtn = document.getElementById("enterFsBtn");
           if (fsBtn) fsBtn.onclick = () => requestFullscreenIfEnabled();
           const d = document.getElementById("dismissOverlay");
