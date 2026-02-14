@@ -279,7 +279,11 @@ export default async function assessmentRoutes(fastify) {
       ]
     );
 
-    await redis.setex(`session:${token}:meta`, 60 * 60 * 24, JSON.stringify({ token, studentId, startedAtIso }));
+    try {
+      await redis.setex(`session:${token}:meta`, 60 * 60 * 24, JSON.stringify({ token, studentId, startedAtIso }));
+    } catch (err) {
+      fastify.log.warn({ err }, "redis setex failed; continuing with postgres-backed session");
+    }
 
     return {
       token,
@@ -422,8 +426,12 @@ export default async function assessmentRoutes(fastify) {
       [token, eventType, details, questionIndex]
     );
 
-    await redis.incr(`session:${token}:violations`);
-    await redis.expire(`session:${token}:violations`, 60 * 60 * 24);
+    try {
+      await redis.incr(`session:${token}:violations`);
+      await redis.expire(`session:${token}:violations`, 60 * 60 * 24);
+    } catch (err) {
+      fastify.log.warn({ err }, "redis violation counter update failed; continuing");
+    }
 
     return { ok: true };
   });
