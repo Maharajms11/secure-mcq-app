@@ -8,14 +8,14 @@
   <style>
     body { background: #f8f7f4; }
     .no-select { user-select: none; -webkit-user-select: none; }
-    .option-btn { min-height: 48px; }
+    .option-btn { min-height: 48px; width: 100%; display: block; cursor: pointer; }
     .assessment-block::before {
       content: '';
       position: absolute;
       inset: 0;
       background-image: repeating-linear-gradient(var(--hatch-angle, 25deg), rgba(40,40,40,0.05) 0px, rgba(40,40,40,0.05) 2px, rgba(255,255,255,0.05) 2px, rgba(255,255,255,0.05) 6px);
       pointer-events: none;
-      z-index: 4;
+      z-index: 35;
       border-radius: 0.75rem;
     }
     @media print {
@@ -89,6 +89,7 @@
       state.currentQuestionPayload = null;
       state.currentResult = null;
       state.eventGuardUntilMs = 0;
+      state.questionTimer = { totalMs: 0, remainingMs: 0, endMs: 0, timedOutHandled: false };
 
       const app = document.getElementById("app");
       if (app) {
@@ -176,6 +177,21 @@
 
       function sanitizeInput(v) {
         return String(v || "").replace(/[<>`]/g, "").trim();
+      }
+
+      function computeQuestionSeconds(stem) {
+        const words = String(stem || "").trim().split(/\s+/).filter(Boolean).length;
+        const secs = Math.ceil(words * 0.4 * 3);
+        return Math.min(45, Math.max(1, secs));
+      }
+
+      function beginQuestionTimer(question) {
+        const secs = computeQuestionSeconds(question?.stem || "");
+        const now = Date.now();
+        state.questionTimer.totalMs = secs * 1000;
+        state.questionTimer.remainingMs = secs * 1000;
+        state.questionTimer.endMs = now + secs * 1000;
+        state.questionTimer.timedOutHandled = false;
       }
 
       function uuid() {
@@ -433,9 +449,19 @@
 
         tickTimerId = setInterval(() => {
           if (!state.session || state.ui.submitted) return;
-          const remaining = Math.max(0, state.timer.endMs - Date.now());
+          const nowTick = Date.now();
+          const remaining = Math.max(0, state.timer.endMs - nowTick);
           state.timer.remainingMs = remaining;
           state.ui.zoomWarning = Math.abs((window.devicePixelRatio || 1) - 1) > 0.15;
+          if (state.currentQuestionPayload?.question && state.questionTimer.endMs) {
+            state.questionTimer.remainingMs = Math.max(0, state.questionTimer.endMs - nowTick);
+            if (state.questionTimer.remainingMs === 0 && !state.questionTimer.timedOutHandled) {
+              state.questionTimer.timedOutHandled = true;
+              logViolation("question_timeout", `q_index=${state.currentQuestionIndex + 1}`);
+              nextQuestion(true);
+              return;
+            }
+          }
           if (!state.timer.warned10 && remaining <= 10 * 60 * 1000) {
             state.timer.warned10 = true;
             alert("10 minute warning.");
@@ -524,6 +550,7 @@
           const first = await apiFetch(`/session/${start.token}/question`);
           state.currentQuestionPayload = first;
           state.currentQuestionIndex = Number(first.questionIndex || 0);
+          beginQuestionTimer(first.question);
 
           activateHardeners();
           startTimer(start.expiresAt);
@@ -539,12 +566,12 @@
         return state.currentQuestionPayload.question || null;
       }
 
-      async function nextQuestion() {
-        if (state.selectedOptionId == null) return;
+      async function nextQuestion(forceTimeout = false) {
+        if (!forceTimeout && state.selectedOptionId == null) return;
         const q = currentQuestion();
         if (!q) return;
         try {
-          const selected = state.selectedOptionId;
+          const selected = forceTimeout ? null : state.selectedOptionId;
           state.selectedOptionId = null;
           render();
           const response = await apiFetch(`/session/${state.session.token}/answer`, {
@@ -577,6 +604,7 @@
 
           state.currentQuestionPayload = response.next;
           state.currentQuestionIndex = Number(response.next?.questionIndex || state.currentQuestionIndex + 1);
+          beginQuestionTimer(response.next?.question);
           if (Number.isFinite(Number(response.remainingMs))) {
             state.timer.remainingMs = Math.max(0, Number(response.remainingMs));
           }
@@ -657,9 +685,9 @@
           // Random greyscale micro-dot noise (~18% opacity), refreshed >=2fps.
           for (let y = 0; y < h; y += 2) {
             for (let x = 0; x < w; x += 2) {
-              if (Math.random() < 0.34) {
+              if (Math.random() < 0.52) {
                 const g = Math.floor(Math.random() * 90) + 80;
-                ctx.fillStyle = `rgba(${g},${g},${g},0.18)`;
+                ctx.fillStyle = `rgba(${g},${g},${g},0.22)`;
                 ctx.fillRect(x, y, 1, 1);
               }
             }
@@ -672,7 +700,7 @@
           const h = wmCanvas.height;
           ctx.clearRect(0, 0, w, h);
           ctx.save();
-          ctx.globalAlpha = 0.09;
+          ctx.globalAlpha = 0.11;
           ctx.fillStyle = "#111827";
           ctx.font = "18px sans-serif";
           ctx.translate(w / 2, h / 2);
@@ -701,6 +729,12 @@
         if (ms <= 2 * 60 * 1000) return "text-red-700 bg-red-100 border-red-300";
         if (ms <= 10 * 60 * 1000) return "text-amber-700 bg-amber-100 border-amber-300";
         return "text-emerald-700 bg-emerald-100 border-emerald-300";
+      }
+
+      function questionTimerBadgeClass(ms, totalMs) {
+        if (ms <= totalMs * 0.2) return "text-red-700 bg-red-100 border-red-300";
+        if (ms <= totalMs * 0.5) return "text-amber-700 bg-amber-100 border-amber-300";
+        return "text-blue-700 bg-blue-100 border-blue-300";
       }
 
       function fmt(ms) {
@@ -967,6 +1001,7 @@
               <div class="max-w-5xl mx-auto px-3 py-2 flex items-center justify-between gap-2 text-sm">
                 <div class="font-semibold truncate">${escapeHtml(state.session.identity.fullName)} | ${escapeHtml(state.config.title)}</div>
                 <div class="px-2 py-1 border rounded ${timerBadgeClass(state.timer.remainingMs)}">${fmt(state.timer.remainingMs)}</div>
+                <div class="px-2 py-1 border rounded ${questionTimerBadgeClass(state.questionTimer.remainingMs, state.questionTimer.totalMs || 1)}">Q: ${fmt(state.questionTimer.remainingMs)}</div>
                 <div>Question ${idx} of ${n}</div>
                 ${state.config.fullscreenEnforcement && !document.fullscreenElement ? `<button id="enterFsBtn" class="px-2 py-1 rounded bg-slate-700 text-white text-xs">Enter Fullscreen</button>` : ""}
               </div>
@@ -975,8 +1010,8 @@
             <main class="max-w-5xl mx-auto p-3 md:p-6 no-select">
               ${state.ui.zoomWarning ? `<div class='mb-3 p-3 rounded border bg-amber-50 border-amber-300 text-amber-800 text-sm'>Zoom appears not at 100%. Please reset browser zoom for optimal display.</div>` : ""}
               <section id="questionCard" class="assessment-block relative bg-white rounded-xl shadow p-4 md:p-6 overflow-hidden" style="--hatch-angle:${15 + Math.floor(Math.random() * 31)}deg;">
-                <canvas id="noiseCanvas" class="absolute inset-0 z-10 pointer-events-none"></canvas>
-                <canvas id="wmCanvas" class="absolute inset-0 z-20 pointer-events-none"></canvas>
+                <canvas id="noiseCanvas" class="absolute inset-0 z-40 pointer-events-none"></canvas>
+                <canvas id="wmCanvas" class="absolute inset-0 z-50 pointer-events-none"></canvas>
                 <div class="relative z-30">
                   ${q.image ? `<img alt='question image' src='${escapeHtml(q.image)}' class='mb-3 max-h-72 w-full object-contain rounded border' />` : ""}
                   <h2 class="text-xl md:text-2xl font-semibold leading-snug">${escapeHtml(q.stem)}</h2>

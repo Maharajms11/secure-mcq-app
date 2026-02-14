@@ -353,10 +353,10 @@ export default async function assessmentRoutes(fastify) {
     const token = request.params.token;
     const body = request.body || {};
     const questionId = sanitizeText(body.questionId);
-    const selectedOriginalId = sanitizeText(body.selectedOriginalId);
+    const selectedOriginalId = body.selectedOriginalId == null ? null : sanitizeText(body.selectedOriginalId);
 
-    if (!questionId || !selectedOriginalId) {
-      return reply.code(400).send({ error: "questionId_and_selectedOriginalId_required" });
+    if (!questionId) {
+      return reply.code(400).send({ error: "questionId_required" });
     }
 
     const result = await withTx(async (client) => {
@@ -379,9 +379,11 @@ export default async function assessmentRoutes(fastify) {
         return { error: "invalid_question_sequence", code: 409 };
       }
 
-      const validOption = (expectedQuestion.distractors || []).some((d) => d.originalId === selectedOriginalId);
-      if (!validOption) {
-        return { error: "invalid_option_for_question", code: 400 };
+      if (selectedOriginalId) {
+        const validOption = (expectedQuestion.distractors || []).some((d) => d.originalId === selectedOriginalId);
+        if (!validOption) {
+          return { error: "invalid_option_for_question", code: 400 };
+        }
       }
 
       const newAnswers = (session.answers || []).concat([{ questionId, selectedOriginalId }]);
