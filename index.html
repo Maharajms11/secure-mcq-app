@@ -33,7 +33,13 @@
       "use strict";
 
       const APP_TITLE = "Secure MCQ Assessment";
-      const API_BASE = localStorage.getItem("mcq_api_base") || "https://secure-mcq-app.onrender.com/api";
+      const API_BASE = (() => {
+        try {
+          return localStorage.getItem("mcq_api_base") || "https://secure-mcq-app.onrender.com/api";
+        } catch {
+          return "https://secure-mcq-app.onrender.com/api";
+        }
+      })();
       const ADMIN_PASSWORD = "admin123";
       const DEFAULT_CONFIG = {
         title: APP_TITLE,
