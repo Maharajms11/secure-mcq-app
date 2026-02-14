@@ -4,7 +4,8 @@ import { config } from "./config.js";
 const { Pool } = pg;
 
 export const pool = new Pool({
-  connectionString: config.databaseUrl
+  connectionString: config.databaseUrl,
+  ssl: config.dbSsl ? { rejectUnauthorized: config.dbSslRejectUnauthorized } : undefined
 });
 
 export async function query(text, params = []) {
