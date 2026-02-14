@@ -185,7 +185,7 @@ export default async function assessmentRoutes(fastify) {
     const out = await query(
       `SELECT code, title, duration_seconds, draw_count, show_post_review,
               fullscreen_enforcement, tab_warn_threshold, tab_autosubmit_threshold,
-              allow_retakes, integrity_notice
+              allow_retakes, integrity_notice, bank_code
        FROM assessments
        WHERE is_active = true
        ORDER BY created_at DESC
@@ -229,17 +229,23 @@ export default async function assessmentRoutes(fastify) {
       return reply.code(403).send({ error: "attempt_limit_reached", attempts });
     }
 
+    const bankCode = sanitizeText(assessment.bank_code || "default");
     const questionsRes = await query(
       `SELECT q.id, q.category, q.difficulty, q.stem, q.explanation, q.image,
               COALESCE(json_agg(json_build_object(
                 'option_key', o.option_key,
                 'option_text', o.option_text,
                 'is_correct', o.is_correct
-              ) ORDER BY o.option_key) FILTER (WHERE o.id IS NOT NULL), '[]'::json) AS options
-       FROM questions q
-       LEFT JOIN question_options o ON o.question_id = q.id
+              ) ORDER BY o.option_key) FILTER (WHERE o.option_key IS NOT NULL), '[]'::json) AS options
+       FROM bank_questions q
+       LEFT JOIN bank_question_options o
+         ON o.bank_code = q.bank_code
+        AND o.question_id = q.id
+       WHERE q.bank_code = $1
        GROUP BY q.id
        ORDER BY q.id`
+      ,
+      [bankCode]
     );
 
     const selectedQuestions = pickQuestions(
@@ -300,7 +306,8 @@ export default async function assessmentRoutes(fastify) {
         tabWarnThreshold: assessment.tab_warn_threshold,
         tabAutosubmitThreshold: assessment.tab_autosubmit_threshold,
         allowRetakes: assessment.allow_retakes,
-        integrityNotice: assessment.integrity_notice
+        integrityNotice: assessment.integrity_notice,
+        bankCode
       }
     };
   });

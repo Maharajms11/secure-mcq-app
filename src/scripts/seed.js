@@ -131,11 +131,17 @@ async function run() {
     await client.query("BEGIN");
 
     await client.query(
+      `INSERT INTO question_banks (code, name, description)
+       VALUES ('default', 'Default Bank', 'Default seeded question bank')
+       ON CONFLICT (code) DO UPDATE SET updated_at = NOW()`
+    );
+
+    await client.query(
       `INSERT INTO assessments (
          code, title, passcode, duration_seconds, draw_count, questions_per_category,
          show_post_review, fullscreen_enforcement, tab_warn_threshold, tab_autosubmit_threshold,
-         allow_retakes, integrity_notice, is_active
-       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,true)
+         allow_retakes, integrity_notice, is_active, bank_code
+       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,true,$13)
        ON CONFLICT (code)
        DO UPDATE SET title = EXCLUDED.title,
                      passcode = EXCLUDED.passcode,
@@ -147,6 +153,7 @@ async function run() {
                      tab_warn_threshold = EXCLUDED.tab_warn_threshold,
                      tab_autosubmit_threshold = EXCLUDED.tab_autosubmit_threshold,
                      allow_retakes = EXCLUDED.allow_retakes,
+                     bank_code = EXCLUDED.bank_code,
                      integrity_notice = EXCLUDED.integrity_notice,
                      updated_at = NOW()`,
       [
@@ -161,11 +168,36 @@ async function run() {
         config.defaults.tabWarnThreshold,
         config.defaults.tabAutosubmitThreshold,
         config.defaults.allowRetakes,
-        INTEGRITY_NOTICE
+        INTEGRITY_NOTICE,
+        "default"
       ]
     );
 
     for (const q of questions) {
+      await client.query(
+        "DELETE FROM bank_question_options WHERE bank_code = $1 AND question_id = $2",
+        ["default", q.id]
+      );
+      await client.query(
+        `INSERT INTO bank_questions (bank_code, id, category, difficulty, stem, explanation, image)
+         VALUES ($1,$2,$3,$4,$5,$6,$7)
+         ON CONFLICT (bank_code, id)
+         DO UPDATE SET category = EXCLUDED.category,
+                       difficulty = EXCLUDED.difficulty,
+                       stem = EXCLUDED.stem,
+                       explanation = EXCLUDED.explanation,
+                       image = EXCLUDED.image,
+                       updated_at = NOW()`,
+        ["default", q.id, q.category, q.difficulty, q.stem, q.explanation, q.image]
+      );
+      for (const d of q.distractors) {
+        await client.query(
+          `INSERT INTO bank_question_options (bank_code, question_id, option_key, option_text, is_correct)
+           VALUES ($1,$2,$3,$4,$5)`,
+          ["default", q.id, d.id, d.text, d.correct]
+        );
+      }
+
       await client.query(
         `INSERT INTO questions (id, category, difficulty, stem, explanation, image)
          VALUES ($1,$2,$3,$4,$5,$6)

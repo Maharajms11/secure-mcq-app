@@ -93,3 +93,65 @@ CREATE TABLE IF NOT EXISTS submissions (
 CREATE INDEX IF NOT EXISTS idx_submissions_student ON submissions(student_id);
 CREATE INDEX IF NOT EXISTS idx_submissions_assessment ON submissions(assessment_id);
 CREATE INDEX IF NOT EXISTS idx_submissions_date ON submissions(submitted_at DESC);
+
+CREATE TABLE IF NOT EXISTS question_banks (
+  code TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS bank_questions (
+  bank_code TEXT NOT NULL REFERENCES question_banks(code) ON DELETE CASCADE,
+  id TEXT NOT NULL,
+  category TEXT NOT NULL,
+  difficulty TEXT NOT NULL,
+  stem TEXT NOT NULL,
+  explanation TEXT NOT NULL,
+  image TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (bank_code, id)
+);
+
+CREATE TABLE IF NOT EXISTS bank_question_options (
+  bank_code TEXT NOT NULL,
+  question_id TEXT NOT NULL,
+  option_key TEXT NOT NULL,
+  option_text TEXT NOT NULL,
+  is_correct BOOLEAN NOT NULL,
+  PRIMARY KEY (bank_code, question_id, option_key),
+  FOREIGN KEY (bank_code, question_id)
+    REFERENCES bank_questions(bank_code, id)
+    ON DELETE CASCADE
+);
+
+INSERT INTO question_banks (code, name, description)
+VALUES ('default', 'Default Bank', 'Default seeded question bank')
+ON CONFLICT (code) DO NOTHING;
+
+ALTER TABLE assessments
+  ADD COLUMN IF NOT EXISTS bank_code TEXT NOT NULL DEFAULT 'default';
+
+CREATE INDEX IF NOT EXISTS idx_assessments_bank_code ON assessments(bank_code);
+CREATE INDEX IF NOT EXISTS idx_bank_questions_bank_code ON bank_questions(bank_code);
+
+-- Backfill legacy global questions into default bank if this bank is empty.
+INSERT INTO bank_questions (bank_code, id, category, difficulty, stem, explanation, image)
+SELECT 'default', q.id, q.category, q.difficulty, q.stem, q.explanation, q.image
+FROM questions q
+WHERE NOT EXISTS (
+  SELECT 1 FROM bank_questions bq WHERE bq.bank_code = 'default' AND bq.id = q.id
+);
+
+INSERT INTO bank_question_options (bank_code, question_id, option_key, option_text, is_correct)
+SELECT 'default', qo.question_id, qo.option_key, qo.option_text, qo.is_correct
+FROM question_options qo
+WHERE NOT EXISTS (
+  SELECT 1
+  FROM bank_question_options bqo
+  WHERE bqo.bank_code = 'default'
+    AND bqo.question_id = qo.question_id
+    AND bqo.option_key = qo.option_key
+);
