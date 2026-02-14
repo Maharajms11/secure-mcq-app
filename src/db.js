@@ -18,8 +18,20 @@ function buildConnectionString() {
   }
 }
 
+function describeConnectionTarget(connectionString) {
+  try {
+    const u = new URL(connectionString);
+    return `${u.username || "unknown"}@${u.hostname || "unknown"}:${u.port || "5432"}${u.pathname || ""}`;
+  } catch {
+    return "unparseable_connection_string";
+  }
+}
+
+const resolvedConnectionString = buildConnectionString();
+console.log(`[db] target=${describeConnectionTarget(resolvedConnectionString)}`);
+
 export const pool = new Pool({
-  connectionString: buildConnectionString(),
+  connectionString: resolvedConnectionString,
   ssl: config.dbSsl ? { rejectUnauthorized: config.dbSslRejectUnauthorized } : undefined
 });
 

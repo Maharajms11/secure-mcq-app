@@ -6,7 +6,7 @@ export const config = {
   nodeEnv: process.env.NODE_ENV || "development",
   host: process.env.HOST || "0.0.0.0",
   port: Number(process.env.PORT || 3000),
-  databaseUrl: process.env.DATABASE_URL || "postgres://mcq:mcq@localhost:5432/mcq",
+  databaseUrl: process.env.APP_DATABASE_URL || process.env.DATABASE_URL || "postgres://mcq:mcq@localhost:5432/mcq",
   dbSsl: String(process.env.DB_SSL || "true") === "true",
   dbSslRejectUnauthorized: String(process.env.DB_SSL_REJECT_UNAUTHORIZED || "false") === "true",
   redisUrl: process.env.REDIS_URL || "redis://localhost:6379",
