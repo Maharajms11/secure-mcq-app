@@ -82,6 +82,7 @@
       state.activeAssessment = null;
       state.currentQuestionPayload = null;
       state.currentResult = null;
+      state.eventGuardUntilMs = 0;
 
       const app = document.getElementById("app");
       let tickTimerId = null;
@@ -315,6 +316,7 @@
       }
 
       function onVisibilityChange() {
+        if (Date.now() < state.eventGuardUntilMs) return;
         if (document.hidden) {
           logViolation("tab_switch", "document hidden");
           enforceViolationEscalation();
@@ -322,6 +324,7 @@
       }
 
       function onBlur() {
+        if (Date.now() < state.eventGuardUntilMs) return;
         if (!blurCounted) {
           blurCounted = true;
           logViolation("window_blur", "window lost focus");
@@ -338,6 +341,7 @@
       }
 
       function onFullscreenChange() {
+        if (Date.now() < state.eventGuardUntilMs) return;
         if (state.session && !document.fullscreenElement) {
           logViolation("fullscreen_exit", "user exited fullscreen");
           state.ui.overlay = "Fullscreen was exited. This has been recorded.";
@@ -486,6 +490,7 @@
           state.ui.inactivityOverlay = false;
           state.ui.submitted = false;
           state.ui.submitting = false;
+          state.eventGuardUntilMs = Date.now() + 8000;
           lastActivityAt = Date.now();
 
           const first = await apiFetch(`/session/${start.token}/question`);
