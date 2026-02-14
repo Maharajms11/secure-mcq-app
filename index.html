@@ -1,0 +1,996 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Secure MCQ Assessment</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    body { background: #f8f7f4; }
+    .no-select { user-select: none; -webkit-user-select: none; }
+    .option-btn { min-height: 48px; }
+    .assessment-block::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background-image: repeating-linear-gradient(var(--hatch-angle, 25deg), rgba(40,40,40,0.05) 0px, rgba(40,40,40,0.05) 2px, rgba(255,255,255,0.05) 2px, rgba(255,255,255,0.05) 6px);
+      pointer-events: none;
+      z-index: 4;
+      border-radius: 0.75rem;
+    }
+    @media print {
+      #app { display: none !important; }
+      #print-blocked { display: block !important; }
+    }
+  </style>
+</head>
+<body class="text-gray-900">
+  <div id="print-blocked" class="hidden p-10 text-center text-2xl font-bold">This assessment cannot be printed.</div>
+  <div id="app" class="min-h-screen"></div>
+
+  <script>
+    (() => {
+      "use strict";
+
+      const APP_TITLE = "Secure MCQ Assessment";
+      const ADMIN_PASSWORD = "admin123";
+      const DEFAULT_CONFIG = {
+        title: APP_TITLE,
+        timeLimitMinutes: 60,
+        drawCount: 10,
+        questionsPerCategory: {},
+        showPostReview: true,
+        fullscreenEnforcement: true,
+        tabSwitchWarnThreshold: 3,
+        tabSwitchAutoSubmitThreshold: 5,
+        allowRetakes: 0,
+        passcode: ""
+      };
+
+      const INTEGRITY_NOTICE = `ASSESSMENT INTEGRITY NOTICE\n\nThis is a supervised assessment. The following measures are active:\n• Copy, paste, and text selection are disabled.\n• Switching browser tabs or windows will be logged.\n• This assessment cannot be printed or screenshotted for AI analysis.\n• Navigation backwards between questions is not permitted.\n• Questions and answer options are randomised for each student.\n• Your name and ID are embedded as a watermark in this assessment.\n• All violation events are recorded and may be reviewed by your invigilator.\n\nBy proceeding, you confirm that you are completing this assessment without unauthorised assistance, including AI tools, notes, or other persons.`;
+
+      const questionBank = [
+        { id: "q001", category: "General", difficulty: "easy", stem: "Which planet is closest to the Sun?", distractors: [{id:"a",text:"Venus",correct:false},{id:"b",text:"Mercury",correct:true},{id:"c",text:"Mars",correct:false},{id:"d",text:"Earth",correct:false}], explanation: "Mercury is the innermost planet in our solar system.", image: null },
+        { id: "q002", category: "General", difficulty: "easy", stem: "What is the chemical symbol for water?", distractors: [{id:"a",text:"O2",correct:false},{id:"b",text:"CO2",correct:false},{id:"c",text:"H2O",correct:true},{id:"d",text:"NaCl",correct:false}], explanation: "Water consists of two hydrogen atoms bonded to one oxygen atom.", image: null },
+        { id: "q003", category: "General", difficulty: "medium", stem: "Which of the following is NOT a programming language?", distractors: [{id:"a",text:"Python",correct:false},{id:"b",text:"Hadoop",correct:true},{id:"c",text:"Ruby",correct:false},{id:"d",text:"Swift",correct:false}], explanation: "Hadoop is a big-data framework, not a programming language.", image: null },
+        { id: "q004", category: "General", difficulty: "medium", stem: "What does RAM stand for?", distractors: [{id:"a",text:"Read Access Memory",correct:false},{id:"b",text:"Random Access Memory",correct:true},{id:"c",text:"Rapid Application Module",correct:false},{id:"d",text:"Runtime Allocation Memory",correct:false}], explanation: "RAM stands for Random Access Memory, used for temporary data storage.", image: null },
+        { id: "q005", category: "General", difficulty: "hard", stem: "In which year did the World Wide Web become publicly available?", distractors: [{id:"a",text:"1985",correct:false},{id:"b",text:"1999",correct:false},{id:"c",text:"1991",correct:true},{id:"d",text:"1995",correct:false}], explanation: "Tim Berners-Lee made the World Wide Web publicly available in 1991.", image: null },
+        { id: "q006", category: "Science", difficulty: "easy", stem: "What is the powerhouse of the cell?", distractors: [{id:"a",text:"Nucleus",correct:false},{id:"b",text:"Ribosome",correct:false},{id:"c",text:"Mitochondria",correct:true},{id:"d",text:"Golgi apparatus",correct:false}], explanation: "Mitochondria produce ATP, the cell's primary energy currency.", image: null },
+        { id: "q007", category: "Science", difficulty: "medium", stem: "What is the speed of light in a vacuum (approximate)?", distractors: [{id:"a",text:"300,000 km/s",correct:true},{id:"b",text:"150,000 km/s",correct:false},{id:"c",text:"1,080,000 km/h",correct:false},{id:"d",text:"30,000 km/s",correct:false}], explanation: "Light travels at approximately 299,792 km/s in a vacuum.", image: null },
+        { id: "q008", category: "Mathematics", difficulty: "easy", stem: "What is the value of π (pi) to two decimal places?", distractors: [{id:"a",text:"3.12",correct:false},{id:"b",text:"3.41",correct:false},{id:"c",text:"3.14",correct:true},{id:"d",text:"3.16",correct:false}], explanation: "Pi is approximately 3.14159, which rounds to 3.14.", image: null },
+        { id: "q009", category: "Mathematics", difficulty: "medium", stem: "What is the square root of 144?", distractors: [{id:"a",text:"11",correct:false},{id:"b",text:"14",correct:false},{id:"c",text:"12",correct:true},{id:"d",text:"13",correct:false}], explanation: "12 × 12 = 144, so the square root of 144 is 12.", image: null },
+        { id: "q010", category: "History", difficulty: "medium", stem: "In which year did the First World War begin?", distractors: [{id:"a",text:"1916",correct:false},{id:"b",text:"1914",correct:true},{id:"c",text:"1918",correct:false},{id:"d",text:"1912",correct:false}], explanation: "World War I began in 1914 following the assassination of Archduke Franz Ferdinand.", image: null }
+      ];
+
+      const state = {
+        route: (location.hash || "#/login").startsWith("#/admin") ? "admin" : "login",
+        config: loadJSON("mcq_config", DEFAULT_CONFIG),
+        bank: loadJSON("mcq_bank", questionBank),
+        results: loadJSON("mcq_results", []),
+        attempts: loadJSON("mcq_attempts", {}),
+        exitedIds: loadJSON("mcq_exited_ids", []),
+        adminAuthed: false,
+        session: null,
+        violations: [],
+        selectedOptionId: null,
+        currentQuestionIndex: 0,
+        answers: [],
+        timer: { remainingMs: 0, startMs: 0, endMs: 0, warned10: false, warned2: false },
+        ui: { overlay: null, inactivityOverlay: false, submitted: false, submitting: false, zoomWarning: false }
+      };
+
+      const app = document.getElementById("app");
+      let tickTimerId = null;
+      let noiseTimerId = null;
+      let watermarkTimerId = null;
+      let devtoolsTimerId = null;
+      let inactivityTimerId = null;
+      let lastActivityAt = Date.now();
+      let blurCounted = false;
+
+      window.addEventListener("hashchange", () => {
+        state.route = (location.hash || "#/login").startsWith("#/admin") ? "admin" : "login";
+        render();
+      });
+
+      function loadJSON(key, fallback) {
+        try {
+          const raw = localStorage.getItem(key);
+          return raw ? JSON.parse(raw) : fallback;
+        } catch {
+          return fallback;
+        }
+      }
+
+      function saveJSON(key, value) {
+        localStorage.setItem(key, JSON.stringify(value));
+      }
+
+      function escapeHtml(s) {
+        return String(s).replace(/[&<>"']/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"})[c]);
+      }
+
+      function sanitizeInput(v) {
+        return String(v || "").replace(/[<>`]/g, "").trim();
+      }
+
+      function uuid() {
+        return crypto.randomUUID ? crypto.randomUUID() : "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, c => {
+          const r = Math.random() * 16 | 0, s = c === "x" ? r : (r & 0x3 | 0x8);
+          return s.toString(16);
+        });
+      }
+
+      function fisherYates(arr) {
+        const a = arr.slice();
+        for (let i = a.length - 1; i > 0; i--) {
+          const j = Math.floor(Math.random() * (i + 1));
+          [a[i], a[j]] = [a[j], a[i]];
+        }
+        return a;
+      }
+
+      function drawQuestions(bank, cfg) {
+        if (cfg.questionsPerCategory && Object.keys(cfg.questionsPerCategory).length) {
+          const out = [];
+          const taken = new Set();
+          for (const [cat, n] of Object.entries(cfg.questionsPerCategory)) {
+            const pool = fisherYates(bank.filter(q => q.category === cat));
+            for (let i = 0; i < Math.min(Number(n) || 0, pool.length); i++) {
+              out.push(pool[i]);
+              taken.add(pool[i].id);
+            }
+          }
+          if (out.length < cfg.drawCount) {
+            const extra = fisherYates(bank.filter(q => !taken.has(q.id))).slice(0, cfg.drawCount - out.length);
+            out.push(...extra);
+          }
+          return fisherYates(out).slice(0, cfg.drawCount);
+        }
+        return fisherYates(bank).slice(0, Math.min(cfg.drawCount, bank.length));
+      }
+
+      function createSession(identity) {
+        const startMs = Date.now();
+        const token = uuid();
+        const seed = uuid();
+        const chosen = drawQuestions(state.bank, state.config);
+        const questions = chosen.map((q) => {
+          const shuffledDistractors = fisherYates(q.distractors);
+          return {
+            id: q.id,
+            category: q.category,
+            difficulty: q.difficulty,
+            stem: q.stem,
+            explanation: q.explanation,
+            image: q.image || null,
+            distractors: shuffledDistractors.map((d, idx) => ({
+              displayLabel: String.fromCharCode(65 + idx),
+              originalId: d.id,
+              text: d.text,
+              correct: !!d.correct
+            }))
+          };
+        });
+
+        return {
+          token,
+          seed,
+          identity,
+          startedAt: startMs,
+          userAgent: navigator.userAgent,
+          screen: `${screen.width}x${screen.height}`,
+          questionOrder: questions.map(q => q.id),
+          questions
+        };
+      }
+
+      function logViolation(type, details) {
+        if (!state.session) return;
+        state.violations.push({
+          token: state.session.token,
+          type,
+          details: details || "",
+          at: new Date().toISOString(),
+          index: state.currentQuestionIndex + 1
+        });
+        render();
+      }
+
+      function activateHardeners() {
+        // Block clipboard operations during assessment.
+        ["copy", "cut", "paste", "contextmenu", "dragstart"].forEach((evt) => {
+          document.addEventListener(evt, blockEvent, true);
+        });
+
+        // Block common keyboard shortcuts for saving/printing/devtools/source/clipboard.
+        document.addEventListener("keydown", onSecureKeydown, true);
+
+        // Block browser back by repushing history state.
+        history.pushState(null, "", location.href);
+        window.addEventListener("popstate", onPopState);
+
+        // Log tab visibility changes and escalate.
+        document.addEventListener("visibilitychange", onVisibilityChange);
+
+        // Log window blur (app switching) once per blur episode.
+        window.addEventListener("blur", onBlur);
+        window.addEventListener("focus", onFocus);
+
+        // Best-effort print block: intercept beforeprint and flag violation.
+        window.addEventListener("beforeprint", onBeforePrint);
+
+        // Fullscreen exit detection (warning + logging).
+        document.addEventListener("fullscreenchange", onFullscreenChange);
+
+        // Best-effort devtools detection as deterrent only (can be bypassed).
+        devtoolsTimerId = setInterval(checkDevtools, 1000);
+
+        // Inactivity detection: overlay after 60s idle.
+        ["mousemove", "keydown", "click", "touchstart"].forEach((evt) => {
+          document.addEventListener(evt, onActivity, true);
+        });
+        resetInactivity();
+      }
+
+      function deactivateHardeners() {
+        ["copy", "cut", "paste", "contextmenu", "dragstart"].forEach((evt) => document.removeEventListener(evt, blockEvent, true));
+        document.removeEventListener("keydown", onSecureKeydown, true);
+        window.removeEventListener("popstate", onPopState);
+        document.removeEventListener("visibilitychange", onVisibilityChange);
+        window.removeEventListener("blur", onBlur);
+        window.removeEventListener("focus", onFocus);
+        window.removeEventListener("beforeprint", onBeforePrint);
+        document.removeEventListener("fullscreenchange", onFullscreenChange);
+        if (devtoolsTimerId) clearInterval(devtoolsTimerId);
+        ["mousemove", "keydown", "click", "touchstart"].forEach((evt) => document.removeEventListener(evt, onActivity, true));
+        if (inactivityTimerId) clearTimeout(inactivityTimerId);
+      }
+
+      function blockEvent(e) { e.preventDefault(); }
+
+      function onSecureKeydown(e) {
+        const k = (e.key || "").toLowerCase();
+        const ctrl = e.ctrlKey || e.metaKey;
+        const shift = e.shiftKey;
+        const blocked =
+          (ctrl && ["c", "x", "v", "a", "s", "p", "u"].includes(k)) ||
+          k === "f12" ||
+          (ctrl && shift && ["i", "j"].includes(k));
+
+        if (blocked) {
+          e.preventDefault();
+          logViolation("blocked_shortcut", `${e.key} ctrl=${ctrl} shift=${shift}`);
+          state.ui.overlay = "Blocked action detected. This event was logged.";
+          render();
+        }
+      }
+
+      function onPopState() {
+        history.pushState(null, "", location.href);
+        logViolation("back_navigation_attempt", "popstate intercepted");
+      }
+
+      function onVisibilityChange() {
+        if (document.hidden) {
+          logViolation("tab_switch", "document hidden");
+          enforceViolationEscalation();
+        }
+      }
+
+      function onBlur() {
+        if (!blurCounted) {
+          blurCounted = true;
+          logViolation("window_blur", "window lost focus");
+          enforceViolationEscalation();
+        }
+      }
+
+      function onFocus() { blurCounted = false; }
+
+      function onBeforePrint(e) {
+        e.preventDefault();
+        logViolation("print_attempt", "beforeprint intercepted");
+        alert("Printing during assessment is blocked.");
+      }
+
+      function onFullscreenChange() {
+        if (state.session && !document.fullscreenElement) {
+          logViolation("fullscreen_exit", "user exited fullscreen");
+          state.ui.overlay = "Fullscreen was exited. This has been recorded.";
+          render();
+        }
+      }
+
+      function checkDevtools() {
+        const wGap = window.outerWidth - window.innerWidth;
+        const hGap = window.outerHeight - window.innerHeight;
+        if (wGap > 160 || hGap > 160) {
+          logViolation("devtools_suspected", `gap:${wGap}x${hGap}`);
+          state.ui.overlay = "Developer tools suspected. This event has been logged.";
+          render();
+        }
+      }
+
+      function onActivity() {
+        lastActivityAt = Date.now();
+        if (state.ui.inactivityOverlay) {
+          state.ui.inactivityOverlay = false;
+          render();
+        }
+        resetInactivity();
+      }
+
+      function resetInactivity() {
+        if (inactivityTimerId) clearTimeout(inactivityTimerId);
+        inactivityTimerId = setTimeout(() => {
+          if (!state.session || state.ui.submitted) return;
+          const idle = Date.now() - lastActivityAt;
+          if (idle >= 60000) {
+            state.ui.inactivityOverlay = true;
+            logViolation("inactivity", `idle_ms:${idle}`);
+            render();
+          }
+        }, 61000);
+      }
+
+      function enforceViolationEscalation() {
+        const tabLikeCount = state.violations.filter(v => ["tab_switch", "window_blur"].includes(v.type)).length;
+        if (tabLikeCount >= state.config.tabSwitchAutoSubmitThreshold) {
+          state.ui.overlay = "Violation threshold reached. Auto-submitting assessment.";
+          render();
+          submitAssessment(true);
+          return;
+        }
+        if (tabLikeCount >= state.config.tabSwitchWarnThreshold) {
+          state.ui.overlay = `Warning: ${tabLikeCount} focus/tab violations recorded.`;
+          render();
+        }
+      }
+
+      function startTimer() {
+        const now = Date.now();
+        state.timer.startMs = now;
+        state.timer.endMs = now + state.config.timeLimitMinutes * 60 * 1000;
+        state.timer.remainingMs = state.timer.endMs - now;
+        state.timer.warned10 = false;
+        state.timer.warned2 = false;
+
+        tickTimerId = setInterval(() => {
+          if (!state.session || state.ui.submitted) return;
+          const remaining = Math.max(0, state.timer.endMs - Date.now());
+          state.timer.remainingMs = remaining;
+          state.ui.zoomWarning = Math.abs((window.devicePixelRatio || 1) - 1) > 0.15;
+          if (!state.timer.warned10 && remaining <= 10 * 60 * 1000) {
+            state.timer.warned10 = true;
+            alert("10 minute warning.");
+          }
+          if (!state.timer.warned2 && remaining <= 2 * 60 * 1000) {
+            state.timer.warned2 = true;
+            alert("2 minute warning.");
+          }
+          if (remaining === 0) {
+            logViolation("timer_expired", "auto submit");
+            submitAssessment(true);
+            return;
+          }
+          render();
+        }, 500);
+      }
+
+      function stopTimer() {
+        if (tickTimerId) clearInterval(tickTimerId);
+        tickTimerId = null;
+      }
+
+      function requestFullscreenIfEnabled() {
+        if (!state.config.fullscreenEnforcement) return;
+        const el = document.documentElement;
+        if (el.requestFullscreen) el.requestFullscreen().catch(() => {
+          logViolation("fullscreen_request_failed", "browser denied fullscreen");
+        });
+      }
+
+      function startAssessment(identity) {
+        const id = sanitizeInput(identity.studentId);
+        if ((state.exitedIds || []).includes(id)) {
+          alert("This student ID is locked and cannot attempt this assessment again.");
+          return;
+        }
+        const prior = Number(state.attempts[id] || 0);
+        if (prior >= Number(state.config.allowRetakes) + 1) {
+          alert("Attempt limit reached for this ID.");
+          return;
+        }
+
+        state.session = createSession({
+          fullName: sanitizeInput(identity.fullName),
+          studentId: id,
+          passcode: sanitizeInput(identity.passcode || "")
+        });
+        state.violations = [];
+        state.answers = [];
+        state.currentQuestionIndex = 0;
+        state.selectedOptionId = null;
+        state.ui.overlay = null;
+        state.ui.inactivityOverlay = false;
+        state.ui.submitted = false;
+        state.ui.submitting = false;
+        lastActivityAt = Date.now();
+
+        activateHardeners();
+        startTimer();
+        requestFullscreenIfEnabled();
+        state.route = "assessment";
+        render();
+      }
+
+      function currentQuestion() {
+        if (!state.session) return null;
+        return state.session.questions[state.currentQuestionIndex] || null;
+      }
+
+      function nextQuestion() {
+        if (state.selectedOptionId == null) return;
+        const q = currentQuestion();
+        if (!q) return;
+
+        // Immutable answer append: prior answers are never edited.
+        state.answers = state.answers.concat([{ questionId: q.id, selectedOriginalId: state.selectedOptionId }]);
+        state.selectedOptionId = null;
+
+        if (state.currentQuestionIndex >= state.session.questions.length - 1) {
+          submitAssessment(false);
+          return;
+        }
+        state.currentQuestionIndex += 1;
+        rerollHatchAngle();
+        render();
+      }
+
+      function submitAssessment(auto) {
+        if (!state.session || state.ui.submitted || state.ui.submitting) return;
+        state.ui.submitting = true;
+        render();
+
+        setTimeout(() => {
+          const endMs = Date.now();
+          const total = state.session.questions.length;
+          let correct = 0;
+          const answerMap = new Map(state.answers.map(a => [a.questionId, a.selectedOriginalId]));
+          const details = state.session.questions.map((q) => {
+            const selectedId = answerMap.get(q.id) || null;
+            const selected = q.distractors.find(d => d.originalId === selectedId) || null;
+            const right = q.distractors.find(d => d.correct);
+            const isCorrect = !!selected && !!right && selected.originalId === right.originalId;
+            if (isCorrect) correct++;
+            return {
+              questionId: q.id,
+              stem: q.stem,
+              selected: selected ? selected.text : "Unanswered",
+              correct: right ? right.text : "N/A",
+              explanation: q.explanation,
+              isCorrect
+            };
+          });
+
+          const timeTakenMs = endMs - state.session.startedAt;
+          const result = {
+            token: state.session.token,
+            seed: state.session.seed,
+            student: state.session.identity,
+            userAgent: state.session.userAgent,
+            screen: state.session.screen,
+            score: correct,
+            total,
+            percentage: Math.round((correct / total) * 100),
+            timeTakenMs,
+            violations: state.violations.slice(),
+            violationCount: state.violations.length,
+            submittedAt: new Date().toISOString(),
+            autoSubmitted: !!auto,
+            details
+          };
+
+          state.results = [result].concat(state.results);
+          saveJSON("mcq_results", state.results);
+
+          const sid = state.session.identity.studentId;
+          state.attempts[sid] = Number(state.attempts[sid] || 0) + 1;
+          saveJSON("mcq_attempts", state.attempts);
+
+          state.ui.submitting = false;
+          state.ui.submitted = true;
+          stopTimer();
+          deactivateHardeners();
+          state.route = "results";
+          render();
+        }, 700);
+      }
+
+      function clearVisualTimers() {
+        if (noiseTimerId) clearInterval(noiseTimerId);
+        if (watermarkTimerId) clearInterval(watermarkTimerId);
+      }
+
+      function rerollHatchAngle() {
+        const host = document.querySelector(".assessment-block");
+        if (!host) return;
+        const angle = 15 + Math.floor(Math.random() * 31);
+        host.style.setProperty("--hatch-angle", `${angle}deg`);
+      }
+
+      function startNoiseAndWatermark() {
+        const noiseCanvas = document.getElementById("noiseCanvas");
+        const wmCanvas = document.getElementById("wmCanvas");
+        const card = document.getElementById("questionCard");
+        if (!noiseCanvas || !wmCanvas || !card || !state.session) return;
+
+        function sizeCanvas(canvas) {
+          const rect = card.getBoundingClientRect();
+          canvas.width = Math.floor(rect.width);
+          canvas.height = Math.floor(rect.height);
+        }
+        sizeCanvas(noiseCanvas);
+        sizeCanvas(wmCanvas);
+
+        function drawNoise() {
+          const ctx = noiseCanvas.getContext("2d");
+          const w = noiseCanvas.width;
+          const h = noiseCanvas.height;
+          ctx.clearRect(0, 0, w, h);
+          // Random greyscale micro-dot noise (~18% opacity), refreshed >=2fps.
+          for (let y = 0; y < h; y += 2) {
+            for (let x = 0; x < w; x += 2) {
+              if (Math.random() < 0.34) {
+                const g = Math.floor(Math.random() * 90) + 80;
+                ctx.fillStyle = `rgba(${g},${g},${g},0.18)`;
+                ctx.fillRect(x, y, 1, 1);
+              }
+            }
+          }
+        }
+
+        function drawWatermark() {
+          const ctx = wmCanvas.getContext("2d");
+          const w = wmCanvas.width;
+          const h = wmCanvas.height;
+          ctx.clearRect(0, 0, w, h);
+          ctx.save();
+          ctx.globalAlpha = 0.09;
+          ctx.fillStyle = "#111827";
+          ctx.font = "18px sans-serif";
+          ctx.translate(w / 2, h / 2);
+          ctx.rotate(-Math.PI / 5);
+          const stamp = `${state.session.identity.fullName} | ${state.session.identity.studentId} | ${new Date().toLocaleTimeString()}`;
+          for (let y = -h; y < h; y += 80) {
+            const jitterX = (Math.random() - 0.5) * 60;
+            ctx.fillText(stamp, -w + jitterX, y);
+          }
+          ctx.restore();
+        }
+
+        drawNoise();
+        drawWatermark();
+        noiseTimerId = setInterval(drawNoise, 500);
+        watermarkTimerId = setInterval(drawWatermark, 3000);
+        window.addEventListener("resize", () => {
+          sizeCanvas(noiseCanvas);
+          sizeCanvas(wmCanvas);
+          drawNoise();
+          drawWatermark();
+        }, { once: true });
+      }
+
+      function timerBadgeClass(ms) {
+        if (ms <= 2 * 60 * 1000) return "text-red-700 bg-red-100 border-red-300";
+        if (ms <= 10 * 60 * 1000) return "text-amber-700 bg-amber-100 border-amber-300";
+        return "text-emerald-700 bg-emerald-100 border-emerald-300";
+      }
+
+      function fmt(ms) {
+        const t = Math.max(0, Math.floor(ms / 1000));
+        const m = Math.floor(t / 60).toString().padStart(2, "0");
+        const s = (t % 60).toString().padStart(2, "0");
+        return `${m}:${s}`;
+      }
+
+      function adminScreen() {
+        const cats = [...new Set(state.bank.map(q => q.category))];
+        const rows = state.results.map((r, i) => `
+          <tr class="border-b">
+            <td class="p-2">${i + 1}</td>
+            <td class="p-2">${escapeHtml(r.student.fullName)}</td>
+            <td class="p-2">${escapeHtml(r.student.studentId)}</td>
+            <td class="p-2">${r.score}/${r.total} (${r.percentage}%)</td>
+            <td class="p-2">${Math.round(r.timeTakenMs / 1000)}s</td>
+            <td class="p-2">${r.violationCount}</td>
+            <td class="p-2">${new Date(r.submittedAt).toLocaleString()}</td>
+          </tr>
+        `).join("");
+
+        return `
+          <div class="max-w-6xl mx-auto p-4 md:p-8 space-y-6">
+            <div class="bg-white rounded-xl shadow p-4">
+              <h1 class="text-2xl font-bold">Admin Panel</h1>
+              <p class="text-sm text-gray-600">Route: /admin (hash: #/admin)</p>
+              <button id="adminLogout" class="mt-2 px-3 py-2 rounded bg-gray-800 text-white">Logout</button>
+            </div>
+
+            <div class="grid md:grid-cols-2 gap-4">
+              <div class="bg-white rounded-xl shadow p-4 space-y-2">
+                <h2 class="text-xl font-semibold">Assessment Configuration</h2>
+                <label class="block text-sm">Title <input id="cfgTitle" class="w-full border rounded p-2" value="${escapeHtml(state.config.title)}"></label>
+                <label class="block text-sm">Time Limit (minutes) <input id="cfgTime" type="number" class="w-full border rounded p-2" value="${state.config.timeLimitMinutes}"></label>
+                <label class="block text-sm">Questions to Draw <input id="cfgDraw" type="number" class="w-full border rounded p-2" value="${state.config.drawCount}"></label>
+                <label class="block text-sm">Assessment Passcode <input id="cfgPass" class="w-full border rounded p-2" value="${escapeHtml(state.config.passcode)}"></label>
+                <label class="block text-sm">Allow Retakes (count) <input id="cfgRetakes" type="number" min="0" class="w-full border rounded p-2" value="${state.config.allowRetakes}"></label>
+                <label class="flex items-center gap-2"><input id="cfgReview" type="checkbox" ${state.config.showPostReview ? "checked" : ""}> Show post-result review</label>
+                <label class="flex items-center gap-2"><input id="cfgFs" type="checkbox" ${state.config.fullscreenEnforcement ? "checked" : ""}> Fullscreen enforcement</label>
+                <label class="block text-sm">Tab warn threshold <input id="cfgWarn" type="number" class="w-full border rounded p-2" value="${state.config.tabSwitchWarnThreshold}"></label>
+                <label class="block text-sm">Tab autosubmit threshold <input id="cfgAuto" type="number" class="w-full border rounded p-2" value="${state.config.tabSwitchAutoSubmitThreshold}"></label>
+                <label class="block text-sm">Questions per category (JSON object)
+                  <textarea id="cfgQpc" class="w-full border rounded p-2 h-20">${escapeHtml(JSON.stringify(state.config.questionsPerCategory || {}))}</textarea>
+                </label>
+                <button id="saveConfig" class="px-3 py-2 rounded bg-blue-700 text-white">Save Config</button>
+              </div>
+
+              <div class="bg-white rounded-xl shadow p-4 space-y-2">
+                <h2 class="text-xl font-semibold">Question Bank Management</h2>
+                <p class="text-sm text-gray-600">Categories: ${cats.join(", ")}</p>
+                <label class="block text-sm">Import JSON
+                  <textarea id="importJson" class="w-full border rounded p-2 h-24" placeholder='[{"id":"q011",...}]'></textarea>
+                </label>
+                <button id="importBank" class="px-3 py-2 rounded bg-indigo-700 text-white">Import/Replace Bank</button>
+                <button id="exportBank" class="px-3 py-2 rounded bg-gray-700 text-white">Export Bank JSON</button>
+                <button id="addSampleQuestion" class="px-3 py-2 rounded bg-emerald-700 text-white">Add Sample Question</button>
+                <div id="bankCount" class="text-sm">Questions: ${state.bank.length}</div>
+              </div>
+            </div>
+
+            <div class="bg-white rounded-xl shadow p-4 space-y-3">
+              <h2 class="text-xl font-semibold">Results Dashboard</h2>
+              <div class="flex gap-2 flex-wrap">
+                <input id="filterMin" type="number" placeholder="Min score %" class="border rounded p-2" />
+                <input id="filterMax" type="number" placeholder="Max score %" class="border rounded p-2" />
+                <select id="filterViolation" class="border rounded p-2">
+                  <option value="all">All</option>
+                  <option value="with">With violations</option>
+                  <option value="none">No violations</option>
+                </select>
+                <button id="applyFilter" class="px-3 py-2 rounded bg-slate-700 text-white">Apply Filter</button>
+                <button id="exportResults" class="px-3 py-2 rounded bg-teal-700 text-white">Export CSV</button>
+              </div>
+              <div class="overflow-x-auto">
+                <table class="w-full text-sm">
+                  <thead class="bg-gray-100">
+                    <tr><th class="p-2 text-left">#</th><th class="p-2 text-left">Name</th><th class="p-2 text-left">ID</th><th class="p-2 text-left">Score</th><th class="p-2 text-left">Time</th><th class="p-2 text-left">Violations</th><th class="p-2 text-left">Submitted</th></tr>
+                  </thead>
+                  <tbody id="resultRows">${rows || "<tr><td colspan='7' class='p-3 text-gray-500'>No results yet.</td></tr>"}</tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        `;
+      }
+
+      function render() {
+        clearVisualTimers();
+
+        if (state.route === "admin") {
+          if (!state.adminAuthed) {
+            app.innerHTML = `
+              <div class="max-w-md mx-auto p-6 mt-16 bg-white rounded-xl shadow space-y-4">
+                <h1 class="text-2xl font-bold">Admin Login</h1>
+                <input id="adminPass" type="password" class="w-full border rounded p-2" placeholder="Admin password">
+                <button id="adminLogin" class="w-full py-2 rounded bg-gray-900 text-white">Login</button>
+                <a href="#/login" class="text-blue-700 underline">Back to assessment</a>
+              </div>
+            `;
+            document.getElementById("adminLogin").onclick = () => {
+              if (document.getElementById("adminPass").value === ADMIN_PASSWORD) {
+                state.adminAuthed = true;
+                render();
+              } else {
+                alert("Invalid admin password.");
+              }
+            };
+            return;
+          }
+
+          app.innerHTML = adminScreen();
+          document.getElementById("adminLogout").onclick = () => { state.adminAuthed = false; render(); };
+          document.getElementById("saveConfig").onclick = () => {
+            try {
+              state.config = {
+                title: sanitizeInput(document.getElementById("cfgTitle").value) || APP_TITLE,
+                timeLimitMinutes: Math.max(1, Number(document.getElementById("cfgTime").value) || 60),
+                drawCount: Math.max(1, Number(document.getElementById("cfgDraw").value) || 10),
+                passcode: sanitizeInput(document.getElementById("cfgPass").value),
+                allowRetakes: Math.max(0, Number(document.getElementById("cfgRetakes").value) || 0),
+                showPostReview: document.getElementById("cfgReview").checked,
+                fullscreenEnforcement: document.getElementById("cfgFs").checked,
+                tabSwitchWarnThreshold: Math.max(1, Number(document.getElementById("cfgWarn").value) || 3),
+                tabSwitchAutoSubmitThreshold: Math.max(2, Number(document.getElementById("cfgAuto").value) || 5),
+                questionsPerCategory: JSON.parse(document.getElementById("cfgQpc").value || "{}")
+              };
+              saveJSON("mcq_config", state.config);
+              alert("Config saved.");
+            } catch {
+              alert("Invalid configuration values.");
+            }
+          };
+          document.getElementById("importBank").onclick = () => {
+            try {
+              const parsed = JSON.parse(document.getElementById("importJson").value);
+              if (!Array.isArray(parsed) || !parsed.length) throw new Error();
+              state.bank = parsed;
+              saveJSON("mcq_bank", state.bank);
+              render();
+            } catch {
+              alert("Invalid bank JSON.");
+            }
+          };
+          document.getElementById("exportBank").onclick = () => download("question-bank.json", JSON.stringify(state.bank, null, 2), "application/json");
+          document.getElementById("addSampleQuestion").onclick = () => {
+            state.bank.push({
+              id: `q${String(state.bank.length + 1).padStart(3, "0")}`,
+              category: "General",
+              difficulty: "easy",
+              stem: "Sample question",
+              distractors: [{id:"a",text:"Option 1",correct:true},{id:"b",text:"Option 2",correct:false}],
+              explanation: "Sample explanation",
+              image: null
+            });
+            saveJSON("mcq_bank", state.bank);
+            render();
+          };
+          document.getElementById("applyFilter").onclick = () => {
+            const min = Number(document.getElementById("filterMin").value || 0);
+            const max = Number(document.getElementById("filterMax").value || 100);
+            const vf = document.getElementById("filterViolation").value;
+            const filtered = state.results.filter(r => r.percentage >= min && r.percentage <= max)
+              .filter(r => vf === "all" ? true : vf === "with" ? r.violationCount > 0 : r.violationCount === 0);
+            document.getElementById("resultRows").innerHTML = filtered.map((r, i) => `
+              <tr class="border-b">
+                <td class="p-2">${i + 1}</td>
+                <td class="p-2">${escapeHtml(r.student.fullName)}</td>
+                <td class="p-2">${escapeHtml(r.student.studentId)}</td>
+                <td class="p-2">${r.score}/${r.total} (${r.percentage}%)</td>
+                <td class="p-2">${Math.round(r.timeTakenMs / 1000)}s</td>
+                <td class="p-2">${r.violationCount}</td>
+                <td class="p-2">${new Date(r.submittedAt).toLocaleString()}</td>
+              </tr>
+            `).join("") || "<tr><td colspan='7' class='p-3 text-gray-500'>No matches.</td></tr>";
+          };
+          document.getElementById("exportResults").onclick = () => {
+            const lines = ["token,name,id,score,total,percentage,timeTakenMs,violations,submittedAt"];
+            state.results.forEach(r => lines.push([
+              r.token,
+              `"${String(r.student.fullName).replace(/"/g, '""')}"`,
+              `"${String(r.student.studentId).replace(/"/g, '""')}"`,
+              r.score,
+              r.total,
+              r.percentage,
+              r.timeTakenMs,
+              r.violationCount,
+              r.submittedAt
+            ].join(",")));
+            download("results.csv", lines.join("\n"), "text/csv");
+          };
+          return;
+        }
+
+        if (state.route === "login") {
+          app.innerHTML = `
+            <div class="max-w-3xl mx-auto p-4 md:p-8 space-y-4">
+              <div class="bg-white rounded-xl shadow p-5">
+                <h1 class="text-3xl font-bold">${escapeHtml(state.config.title)}</h1>
+                <p class="text-gray-600 mt-1">Secure, sequential, monitored MCQ assessment</p>
+              </div>
+              <div class="bg-white rounded-xl shadow p-5 space-y-3">
+                <h2 class="text-xl font-semibold">Identity Capture</h2>
+                <input id="fullName" class="w-full border rounded p-2" placeholder="Full Name">
+                <input id="studentId" class="w-full border rounded p-2" placeholder="Student/Employee ID">
+                <input id="passcode" class="w-full border rounded p-2" placeholder="Assessment Code (if required)">
+                <label class="flex items-start gap-2 text-sm"><input id="honesty" type="checkbox" class="mt-1">I confirm I will complete this assessment honestly and without assistance.</label>
+                <pre class="whitespace-pre-wrap text-sm bg-gray-50 border rounded p-3">${escapeHtml(INTEGRITY_NOTICE)}</pre>
+                <button id="toRules" class="w-full py-2 rounded bg-blue-700 text-white">Continue</button>
+                <a href="#/admin" class="text-blue-700 underline">Admin</a>
+              </div>
+            </div>
+          `;
+          document.getElementById("toRules").onclick = () => {
+            const fullName = sanitizeInput(document.getElementById("fullName").value);
+            const studentId = sanitizeInput(document.getElementById("studentId").value);
+            const passcode = sanitizeInput(document.getElementById("passcode").value);
+            const honest = document.getElementById("honesty").checked;
+
+            if (!fullName || !studentId || !honest) {
+              alert("Please complete all required fields and confirmation.");
+              return;
+            }
+            if (state.config.passcode && passcode !== state.config.passcode) {
+              alert("Invalid assessment code.");
+              return;
+            }
+            state.pendingIdentity = { fullName, studentId, passcode };
+            state.route = "rules";
+            render();
+          };
+          return;
+        }
+
+        if (state.route === "rules") {
+          app.innerHTML = `
+            <div class="max-w-3xl mx-auto p-4 md:p-8">
+              <div class="bg-white rounded-xl shadow p-6 space-y-4">
+                <h1 class="text-2xl font-bold">Assessment Rules</h1>
+                <ul class="list-disc ml-5 text-sm space-y-1">
+                  <li>Number of questions: ${state.config.drawCount}</li>
+                  <li>Time allowed: ${state.config.timeLimitMinutes} minutes</li>
+                  <li>Tab/window switching events are logged and may trigger auto-submit</li>
+                  <li>No back navigation between questions</li>
+                  <li>Anti-cheating monitoring and watermarking are active</li>
+                </ul>
+                <pre class="whitespace-pre-wrap text-sm bg-gray-50 border rounded p-3">${escapeHtml(INTEGRITY_NOTICE)}</pre>
+                <button id="startAssessment" class="w-full py-3 rounded bg-green-700 text-white font-semibold">Start Assessment</button>
+              </div>
+            </div>
+          `;
+          document.getElementById("startAssessment").onclick = () => startAssessment(state.pendingIdentity);
+          return;
+        }
+
+        if (state.route === "assessment" && state.session) {
+          const q = currentQuestion();
+          if (!q) return;
+          const n = state.session.questions.length;
+          const idx = state.currentQuestionIndex + 1;
+          app.innerHTML = `
+            <header class="sticky top-0 z-40 border-b bg-white/95 backdrop-blur">
+              <div class="max-w-5xl mx-auto px-3 py-2 flex items-center justify-between gap-2 text-sm">
+                <div class="font-semibold truncate">${escapeHtml(state.session.identity.fullName)} | ${escapeHtml(state.config.title)}</div>
+                <div class="px-2 py-1 border rounded ${timerBadgeClass(state.timer.remainingMs)}">${fmt(state.timer.remainingMs)}</div>
+                <div>Question ${idx} of ${n}</div>
+              </div>
+            </header>
+
+            <main class="max-w-5xl mx-auto p-3 md:p-6 no-select">
+              ${state.ui.zoomWarning ? `<div class='mb-3 p-3 rounded border bg-amber-50 border-amber-300 text-amber-800 text-sm'>Zoom appears not at 100%. Please reset browser zoom for optimal display.</div>` : ""}
+              <section id="questionCard" class="assessment-block relative bg-white rounded-xl shadow p-4 md:p-6 overflow-hidden" style="--hatch-angle:${15 + Math.floor(Math.random() * 31)}deg;">
+                <canvas id="noiseCanvas" class="absolute inset-0 z-10 pointer-events-none"></canvas>
+                <canvas id="wmCanvas" class="absolute inset-0 z-20 pointer-events-none"></canvas>
+                <div class="relative z-30">
+                  ${q.image ? `<img alt='question image' src='${escapeHtml(q.image)}' class='mb-3 max-h-72 w-full object-contain rounded border' />` : ""}
+                  <h2 class="text-xl md:text-2xl font-semibold leading-snug">${escapeHtml(q.stem)}</h2>
+                  <div class="mt-4 space-y-2">
+                    ${q.distractors.map(d => `
+                      <button data-option="${escapeHtml(d.originalId)}" class="option-btn w-full text-left border rounded-lg px-4 py-3 bg-white/90 hover:bg-slate-50 ${state.selectedOptionId === d.originalId ? "border-blue-600 ring-2 ring-blue-200" : "border-gray-300"}">
+                        <span class="font-semibold mr-2">${d.displayLabel}.</span>${escapeHtml(d.text)}
+                      </button>
+                    `).join("")}
+                  </div>
+                  <button id="nextBtn" class="mt-5 w-full md:w-auto px-6 py-3 rounded font-semibold ${state.selectedOptionId ? "bg-blue-700 text-white" : "bg-gray-300 text-gray-600 cursor-not-allowed"}" ${state.selectedOptionId ? "" : "disabled"}>${idx === n ? "Submit" : "Next Question"}</button>
+                </div>
+              </section>
+            </main>
+
+            ${state.ui.overlay ? `<div class='fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4'><div class='max-w-md w-full bg-white rounded-xl p-5'><h3 class='text-lg font-bold mb-2'>Security Warning</h3><p class='text-sm'>${escapeHtml(state.ui.overlay)}</p><button id='dismissOverlay' class='mt-4 w-full py-2 rounded bg-red-700 text-white'>I Understand</button></div></div>` : ""}
+            ${state.ui.inactivityOverlay ? `<div class='fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4'><div class='max-w-md w-full bg-white rounded-xl p-5'><h3 class='text-lg font-bold mb-2'>Are you still there?</h3><p class='text-sm'>No activity detected for 60 seconds. Timer continues running.</p><button id='resumeBtn' class='mt-4 w-full py-2 rounded bg-blue-700 text-white'>Continue Assessment</button></div></div>` : ""}
+          `;
+
+          startNoiseAndWatermark();
+          rerollHatchAngle();
+          document.querySelectorAll("[data-option]").forEach(btn => btn.onclick = () => { state.selectedOptionId = btn.getAttribute("data-option"); render(); });
+          document.getElementById("nextBtn").onclick = nextQuestion;
+          const d = document.getElementById("dismissOverlay");
+          if (d) d.onclick = () => { state.ui.overlay = null; render(); };
+          const r = document.getElementById("resumeBtn");
+          if (r) r.onclick = () => { state.ui.inactivityOverlay = false; lastActivityAt = Date.now(); resetInactivity(); render(); };
+          return;
+        }
+
+        if (state.route === "results" && state.results.length) {
+          const r = state.results[0];
+          app.innerHTML = `
+            <div class="max-w-4xl mx-auto p-4 md:p-8 space-y-4">
+              <div class="bg-white rounded-xl shadow p-6">
+                <h1 class="text-2xl font-bold">Assessment Results</h1>
+                <p class="mt-2">Score: <strong>${r.score} / ${r.total}</strong> (${r.percentage}%)</p>
+                <p>Time taken: <strong>${Math.round(r.timeTakenMs / 1000)} seconds</strong></p>
+                <p>Violation flags: <strong>${r.violationCount}</strong></p>
+                <p class="text-sm text-gray-600 mt-2">Assessment Reference Number: <code>${escapeHtml(r.token)}</code></p>
+                <div class="mt-3">
+                  <button id="downloadResultsJson" class="px-4 py-2 rounded bg-gray-900 text-white">Download Results (JSON)</button>
+                  <button id="downloadReviewCsv" class="ml-2 px-4 py-2 rounded bg-slate-700 text-white">Download Review (CSV)</button>
+                  <button id="exitAssessment" class="ml-2 px-4 py-2 rounded bg-red-700 text-white">Exit</button>
+                </div>
+              </div>
+
+              <div class="bg-white rounded-xl shadow p-6">
+                <h2 class="text-xl font-semibold mb-2">Violation Log</h2>
+                <pre class="text-xs bg-gray-50 border rounded p-3 overflow-x-auto">${escapeHtml(JSON.stringify(r.violations, null, 2))}</pre>
+              </div>
+
+              ${state.config.showPostReview ? `<div class='bg-white rounded-xl shadow p-6'><h2 class='text-xl font-semibold mb-2'>Question Review</h2>${r.details.map((d, i) => `<div class='border rounded p-3 mb-2'><div class='font-semibold'>Q${i+1}: ${escapeHtml(d.stem)}</div><div class='text-sm mt-1'>Your answer: ${escapeHtml(d.selected)}</div><div class='text-sm'>Correct answer: ${escapeHtml(d.correct)}</div><div class='text-xs text-gray-600 mt-1'>${escapeHtml(d.explanation)}</div></div>`).join("")}</div>` : ""}
+            </div>
+          `;
+          document.getElementById("downloadResultsJson").onclick = () => {
+            const payload = buildResultExportPayload(r);
+            download(`results-${r.token}.json`, JSON.stringify(payload, null, 2), "application/json");
+          };
+          document.getElementById("downloadReviewCsv").onclick = () => {
+            const csv = buildReviewCsv(r);
+            download(`review-${r.token}.csv`, csv, "text/csv");
+          };
+          document.getElementById("exitAssessment").onclick = () => {
+            const sid = String(r.student?.studentId || "");
+            if (sid && !(state.exitedIds || []).includes(sid)) {
+              state.exitedIds = (state.exitedIds || []).concat([sid]);
+              saveJSON("mcq_exited_ids", state.exitedIds);
+            }
+            state.session = null;
+            app.innerHTML = `<div class="max-w-xl mx-auto mt-24 bg-white rounded-xl shadow p-6 text-center"><h1 class="text-2xl font-bold">Assessment Closed</h1><p class="mt-2 text-gray-700">This session has ended. You can now close this tab.</p></div>`;
+            setTimeout(() => {
+              window.location.replace("about:blank");
+            }, 250);
+          };
+          return;
+        }
+      }
+
+      function buildResultExportPayload(result) {
+        return {
+          assessmentReference: result.token,
+          submittedAt: result.submittedAt,
+          student: result.student,
+          summary: {
+            score: result.score,
+            total: result.total,
+            percentage: result.percentage,
+            timeTakenMs: result.timeTakenMs,
+            autoSubmitted: !!result.autoSubmitted
+          },
+          violations: result.violations || [],
+          questionReview: result.details || []
+        };
+      }
+
+      function csvCell(v) {
+        return `"${String(v ?? "").replace(/"/g, "\"\"")}"`;
+      }
+
+      function buildReviewCsv(result) {
+        const lines = [
+          "questionNumber,questionId,stem,selectedAnswer,correctAnswer,isCorrect,explanation"
+        ];
+        (result.details || []).forEach((d, i) => {
+          lines.push([
+            i + 1,
+            d.questionId || "",
+            csvCell(d.stem),
+            csvCell(d.selected),
+            csvCell(d.correct),
+            d.isCorrect ? "true" : "false",
+            csvCell(d.explanation)
+          ].join(","));
+        });
+        return lines.join("\n");
+      }
+
+      function download(name, content, type) {
+        const blob = new Blob([content], { type });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = name;
+        a.click();
+        URL.revokeObjectURL(url);
+      }
+
+      render();
+    })();
+  </script>
+</body>
+</html>

@@ -1,0 +1,30 @@
+services:
+  api:
+    build: .
+    env_file:
+      - .env
+    ports:
+      - "3000:3000"
+    depends_on:
+      - postgres
+      - redis
+    command: sh -c "npm run migrate && npm run seed && npm run start"
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: mcq
+      POSTGRES_PASSWORD: mcq
+      POSTGRES_DB: mcq
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+volumes:
+  pgdata:
