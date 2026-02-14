@@ -27,12 +27,39 @@ function describeConnectionTarget(connectionString) {
   }
 }
 
+function buildPoolConfig() {
+  const resolvedConnectionString = buildConnectionString();
+  const base = {
+    ssl: config.dbSsl ? { rejectUnauthorized: config.dbSslRejectUnauthorized } : undefined
+  };
+
+  try {
+    const u = new URL(resolvedConnectionString);
+    const database = (u.pathname || "/postgres").replace(/^\//, "") || "postgres";
+    return {
+      ...base,
+      host: u.hostname,
+      port: Number(u.port || 5432),
+      user: decodeURIComponent(u.username || ""),
+      password: decodeURIComponent(u.password || ""),
+      database
+    };
+  } catch {
+    return {
+      ...base,
+      connectionString: resolvedConnectionString
+    };
+  }
+}
+
 const resolvedConnectionString = buildConnectionString();
+const poolConfig = buildPoolConfig();
+const hasPgOverrides = ["PGUSER", "PGPASSWORD", "PGHOST", "PGPORT", "PGDATABASE"].some((k) => !!process.env[k]);
 console.log(`[db] target=${describeConnectionTarget(resolvedConnectionString)}`);
+console.log(`[db] pg_env_overrides_present=${hasPgOverrides ? "yes" : "no"}`);
 
 export const pool = new Pool({
-  connectionString: resolvedConnectionString,
-  ssl: config.dbSsl ? { rejectUnauthorized: config.dbSslRejectUnauthorized } : undefined
+  ...poolConfig
 });
 
 export async function query(text, params = []) {
