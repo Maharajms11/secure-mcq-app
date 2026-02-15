@@ -3,12 +3,6 @@ import { redis } from "../redis.js";
 import { enforceRateLimit } from "../rate-limit.js";
 import { fisherYates, randomUuid, sanitizeText, verifySecret } from "../utils.js";
 
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-
-function normalizeEmail(value) {
-  return sanitizeText(value || "").toLowerCase();
-}
-
 function parseAllocations(assessment) {
   const fromJson = Array.isArray(assessment.bank_allocations) ? assessment.bank_allocations : [];
   const normalized = fromJson
@@ -275,15 +269,12 @@ export default async function assessmentRoutes(fastify) {
     const body = request.body || {};
     const fullName = sanitizeText(body.fullName);
     const studentId = sanitizeText(body.studentId);
-    const studentEmail = normalizeEmail(body.email || body.studentEmail);
+    const studentEmail = sanitizeText(body.email || body.studentEmail || "");
     const passcode = sanitizeText(body.passcode || "");
     const assessmentCode = sanitizeText(body.assessmentCode || "");
 
-    if (!fullName || !studentId || !studentEmail) {
-      return reply.code(400).send({ error: "fullName_studentId_email_required" });
-    }
-    if (!EMAIL_RE.test(studentEmail)) {
-      return reply.code(400).send({ error: "invalid_email" });
+    if (!fullName || !studentId) {
+      return reply.code(400).send({ error: "fullName_and_studentId_required" });
     }
 
     const assessmentRes = await query(
@@ -371,7 +362,9 @@ export default async function assessmentRoutes(fastify) {
         if (existing.disconnect_count === 0) {
           await client.query(
           `UPDATE sessions
-             SET disconnect_count = 1, last_disconnect_at = NOW(), student_email = $2
+             SET disconnect_count = 1,
+                 last_disconnect_at = NOW(),
+                 student_email = COALESCE(NULLIF($2, ''), student_email)
              WHERE token = $1`,
             [existing.token, studentEmail]
           );

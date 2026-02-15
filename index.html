@@ -1098,6 +1098,7 @@
                 <label class="flex items-center gap-2"><input id="resultsReleasedInput" type="checkbox" ${state.adminDraft.resultsReleased ? "checked" : ""}> Results released</label>
                 <div>
                   <p class="font-semibold mb-2">Bank allocations</p>
+                  <p class="text-xs text-gray-600 mb-2">Select any subset from each bank. Only the allocation total must match Total questions.</p>
                   <div id="allocRows">${allocationRows}</div>
                   <button id="addAllocBtn" class="px-3 py-2 rounded bg-gray-200">Add Allocation Row</button>
                   <p class="text-xs mt-2">Allocation total: <strong id="allocTotal">${allocTotal}</strong></p>
@@ -1555,7 +1556,7 @@
                 <h2 class="text-xl font-semibold">Identity Capture</h2>
                 <input id="fullName" class="w-full border rounded p-2" placeholder="Full Name">
                 <input id="studentId" class="w-full border rounded p-2" placeholder="Student/Employee ID">
-                <input id="studentEmail" type="email" class="w-full border rounded p-2" placeholder="Email address (for result notification)">
+                <input id="studentEmail" type="text" class="w-full border rounded p-2" placeholder="Email address (for result notification)">
                 <input id="assessmentCode" class="w-full border rounded p-2" placeholder="Assessment Code (default: ASSESS-2026)">
                 <input id="passcode" class="w-full border rounded p-2" placeholder="Assessment Passcode (if required)">
                 <label class="flex items-start gap-2 text-sm"><input id="honesty" type="checkbox" class="mt-1">I confirm I will complete this assessment honestly and without assistance.</label>
@@ -1568,18 +1569,13 @@
           document.getElementById("toRules").onclick = () => {
             const fullName = sanitizeInput(document.getElementById("fullName").value);
             const studentId = sanitizeInput(document.getElementById("studentId").value);
-            const email = sanitizeInput(document.getElementById("studentEmail").value).toLowerCase();
+            const email = sanitizeInput(document.getElementById("studentEmail").value);
             const assessmentCode = sanitizeInput(document.getElementById("assessmentCode").value) || "ASSESS-2026";
             const passcode = sanitizeInput(document.getElementById("passcode").value);
             const honest = document.getElementById("honesty").checked;
-            const emailOk = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
 
-            if (!fullName || !studentId || !email || !honest) {
-              alert("Please complete name, ID, email, and honesty confirmation.");
-              return;
-            }
-            if (!emailOk) {
-              alert("Please enter a valid email address.");
+            if (!fullName || !studentId || !honest) {
+              alert("Please complete name, ID, and honesty confirmation.");
               return;
             }
             state.pendingIdentity = { fullName, studentId, email, assessmentCode, passcode };
