@@ -1163,7 +1163,14 @@
               return;
             }
             try {
-              await adminApiFetch("/admin/tests", { method: "POST", body: payload });
+              const exists = (state.adminData.tests || []).some(
+                (t) => String(t.code || "").toLowerCase() === String(payload.code || "").toLowerCase()
+              );
+              if (exists) {
+                await adminApiFetch(`/admin/tests/${encodeURIComponent(payload.code)}`, { method: "PUT", body: payload });
+              } else {
+                await adminApiFetch("/admin/tests", { method: "POST", body: payload });
+              }
               await refreshAdminData();
               render();
             } catch (err) {
