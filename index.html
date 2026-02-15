@@ -1036,6 +1036,7 @@
 
       function adminScreen() {
         const banks = state.adminData.banks || [];
+        const usableBanks = banks.filter((b) => Number(b.question_count || 0) > 0);
         const tests = state.adminData.tests || [];
         const results = state.adminData.results || [];
         const analytics = state.adminData.analytics || [];
@@ -1043,7 +1044,7 @@
           <div class="grid grid-cols-12 gap-2 items-center mb-2" data-alloc-row="${i}">
             <select class="col-span-7 border rounded p-2 alloc-bank">
               <option value="">Select bank</option>
-              ${banks.map((b) => `<option value="${escapeHtml(b.code)}" ${a.bankCode === b.code ? "selected" : ""}>${escapeHtml(b.code)} (${b.question_count})</option>`).join("")}
+              ${banks.map((b) => `<option value="${escapeHtml(b.code)}" ${a.bankCode === b.code ? "selected" : ""} ${Number(b.question_count || 0) < 1 ? "disabled" : ""}>${escapeHtml(b.code)} (${b.question_count})</option>`).join("")}
             </select>
             <input type="number" min="1" class="col-span-3 border rounded p-2 alloc-count" value="${Number(a.count || 1)}">
             <button type="button" class="col-span-2 px-2 py-2 rounded bg-gray-200 remove-alloc">Remove</button>
@@ -1106,11 +1107,12 @@
                 <div>
                   <p class="font-semibold mb-2">Bank allocations</p>
                   <p class="text-xs text-gray-600 mb-2">Select any subset from each bank. Only the allocation total must match Total questions.</p>
+                  ${usableBanks.length ? `<p class="text-xs text-emerald-700 mb-2">Using existing banks only. Upload is not required for every new test.</p>` : `<p class="text-xs text-red-700 mb-2">No question banks with questions are available. Upload a bank first.</p>`}
                   <div id="allocRows">${allocationRows}</div>
                   <button id="addAllocBtn" class="px-3 py-2 rounded bg-gray-200">Add Allocation Row</button>
                   <p class="text-xs mt-2">Allocation total: <strong id="allocTotal">${allocTotal}</strong></p>
                 </div>
-                <button id="saveTestBtn" class="px-3 py-2 rounded bg-blue-700 text-white">Save Test Config</button>
+                <button id="saveTestBtn" class="px-3 py-2 rounded bg-blue-700 text-white ${usableBanks.length ? "" : "opacity-60 cursor-not-allowed"}" ${usableBanks.length ? "" : "disabled"}>Save Test Config</button>
               </div>
             </div>
 
@@ -1289,7 +1291,13 @@
             if (totalEl) totalEl.textContent = String(sum);
             const saveBtn = document.getElementById("saveTestBtn");
             if (saveBtn) {
-              const ok = sum === totalQuestions && totalQuestions > 0;
+              const bankCount = new Map((state.adminData.banks || []).map((b) => [String(b.code), Number(b.question_count || 0)]));
+              const hasUsableBanks = [...bankCount.values()].some((c) => c > 0);
+              const banksValid = allocations.every((a) => {
+                const available = bankCount.get(String(a.bankCode)) || 0;
+                return available > 0 && a.count <= available;
+              });
+              const ok = hasUsableBanks && banksValid && sum === totalQuestions && totalQuestions > 0;
               saveBtn.disabled = !ok;
               saveBtn.className = `px-3 py-2 rounded text-white ${ok ? "bg-blue-700" : "bg-gray-400 cursor-not-allowed"}`;
             }
@@ -1372,6 +1380,23 @@
           };
           document.getElementById("saveTestBtn").onclick = async () => {
             const allocations = readAllocationsFromDom();
+            const bankCount = new Map((state.adminData.banks || []).map((b) => [String(b.code), Number(b.question_count || 0)]));
+            const hasUsableBanks = [...bankCount.values()].some((c) => c > 0);
+            if (!hasUsableBanks) {
+              alert("Cannot save test: no question banks with questions are available.");
+              return;
+            }
+            for (const a of allocations) {
+              const available = bankCount.get(String(a.bankCode)) || 0;
+              if (available < 1) {
+                alert(`Cannot save test: bank '${a.bankCode}' has no questions.`);
+                return;
+              }
+              if (a.count > available) {
+                alert(`Cannot save test: bank '${a.bankCode}' only has ${available} questions, but ${a.count} requested.`);
+                return;
+              }
+            }
 
             const payload = {
               testName: sanitizeInput(document.getElementById("testNameInput").value),
