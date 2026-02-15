@@ -258,6 +258,14 @@
         return String(v || "").replace(/[<>`]/g, "").trim();
       }
 
+      function localDateTimeInputToIso(value) {
+        const raw = String(value || "").trim();
+        if (!raw) return "";
+        const d = new Date(raw);
+        if (Number.isNaN(d.getTime())) return "";
+        return d.toISOString();
+      }
+
 
       function uuid() {
         return crypto.randomUUID ? crypto.randomUUID() : "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, c => {
@@ -1126,8 +1134,8 @@
               code: sanitizeInput(document.getElementById("testCodeInput").value),
               totalQuestions: Number(document.getElementById("totalQuestionsInput").value || 0),
               durationMinutes: Number(document.getElementById("durationInput").value || 0),
-              windowStart: document.getElementById("windowStartInput").value,
-              windowEnd: document.getElementById("windowEndInput").value,
+              windowStart: localDateTimeInputToIso(document.getElementById("windowStartInput").value),
+              windowEnd: localDateTimeInputToIso(document.getElementById("windowEndInput").value),
               status: document.getElementById("testStatusInput").value,
               resultsReleased: document.getElementById("resultsReleasedInput").checked,
               passcode: sanitizeInput(document.getElementById("testPasscodeInput").value),
