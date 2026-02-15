@@ -3,6 +3,12 @@ import { redis } from "../redis.js";
 import { enforceRateLimit } from "../rate-limit.js";
 import { fisherYates, randomUuid, sanitizeText, verifySecret } from "../utils.js";
 
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+function normalizeEmail(value) {
+  return sanitizeText(value || "").toLowerCase();
+}
+
 function parseAllocations(assessment) {
   const fromJson = Array.isArray(assessment.bank_allocations) ? assessment.bank_allocations : [];
   const normalized = fromJson
@@ -144,11 +150,13 @@ async function finalizeSession(client, session, autoSubmitted, terminatedReason 
   const resultPayload = {
     token: session.token,
     seed: session.seed,
+    resultAccessToken: session.result_access_token || null,
     assessmentCode: assessment.code || "",
     assessmentTitle: assessment.title || "",
     student: {
       fullName: session.student_name,
-      studentId: session.student_id
+      studentId: session.student_id,
+      email: session.student_email || ""
     },
     score,
     total,
@@ -176,9 +184,10 @@ async function finalizeSession(client, session, autoSubmitted, terminatedReason 
   await client.query(
     `INSERT INTO submissions (
        session_token, assessment_id, student_name, student_id,
-       score, total, percentage, time_taken_ms, violation_count, auto_submitted, result_payload
-     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+       student_email, score, total, percentage, time_taken_ms, violation_count, auto_submitted, result_payload
+     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
      ON CONFLICT (session_token) DO UPDATE SET
+       student_email = EXCLUDED.student_email,
        score = EXCLUDED.score,
        total = EXCLUDED.total,
        percentage = EXCLUDED.percentage,
@@ -191,6 +200,7 @@ async function finalizeSession(client, session, autoSubmitted, terminatedReason 
       session.assessment_id,
       session.student_name,
       session.student_id,
+      session.student_email || "",
       score,
       total,
       percentage,
@@ -265,11 +275,15 @@ export default async function assessmentRoutes(fastify) {
     const body = request.body || {};
     const fullName = sanitizeText(body.fullName);
     const studentId = sanitizeText(body.studentId);
+    const studentEmail = normalizeEmail(body.email || body.studentEmail);
     const passcode = sanitizeText(body.passcode || "");
     const assessmentCode = sanitizeText(body.assessmentCode || "");
 
-    if (!fullName || !studentId) {
-      return reply.code(400).send({ error: "fullName_and_studentId_required" });
+    if (!fullName || !studentId || !studentEmail) {
+      return reply.code(400).send({ error: "fullName_studentId_email_required" });
+    }
+    if (!EMAIL_RE.test(studentEmail)) {
+      return reply.code(400).send({ error: "invalid_email" });
     }
 
     const assessmentRes = await query(
@@ -356,10 +370,10 @@ export default async function assessmentRoutes(fastify) {
       await withTx(async (client) => {
         if (existing.disconnect_count === 0) {
           await client.query(
-            `UPDATE sessions
-             SET disconnect_count = 1, last_disconnect_at = NOW()
+          `UPDATE sessions
+             SET disconnect_count = 1, last_disconnect_at = NOW(), student_email = $2
              WHERE token = $1`,
-            [existing.token]
+            [existing.token, studentEmail]
           );
         }
         await client.query(
@@ -462,9 +476,10 @@ export default async function assessmentRoutes(fastify) {
     const inserted = await query(
       `INSERT INTO sessions (
          token, seed, assessment_id, student_name, student_id,
-         user_agent, screen_resolution, started_at, expires_at, window_end_at,
+         student_email, user_agent, screen_resolution, started_at, expires_at, window_end_at,
+         result_access_token,
          question_order, questions_snapshot, disconnect_count
-       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,0)
+       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,0)
        RETURNING *`,
       [
         token,
@@ -472,11 +487,13 @@ export default async function assessmentRoutes(fastify) {
         assessment.id,
         fullName,
         studentId,
+        studentEmail,
         request.headers["user-agent"] || "unknown",
         sanitizeText(body.screenResolution || "unknown"),
         startedAtIso,
         expiresAtIso,
         assessment.window_end,
+        randomUuid(),
         JSON.stringify(snapshot.map((q) => q.id)),
         JSON.stringify(snapshot)
       ]
@@ -743,6 +760,29 @@ export default async function assessmentRoutes(fastify) {
        JOIN assessments a ON a.id = se.assessment_id
        WHERE s.session_token = $1`,
       [token]
+    );
+    if (!out.rows[0]) {
+      return reply.code(404).send({ error: "result_not_found" });
+    }
+    if (!out.rows[0].results_released) {
+      return reply.code(403).send({ error: "results_not_released" });
+    }
+    return out.rows[0].result_payload;
+  });
+
+  // Public result endpoint for email deep-links.
+  fastify.get("/results/:accessToken", async (request, reply) => {
+    const accessToken = sanitizeText(request.params.accessToken || "");
+    if (!accessToken) return reply.code(400).send({ error: "access_token_required" });
+
+    const out = await query(
+      `SELECT sub.result_payload, a.results_released
+       FROM sessions se
+       JOIN submissions sub ON sub.session_token = se.token
+       JOIN assessments a ON a.id = se.assessment_id
+       WHERE se.result_access_token::text = $1
+       LIMIT 1`,
+      [accessToken]
     );
     if (!out.rows[0]) {
       return reply.code(404).send({ error: "result_not_found" });

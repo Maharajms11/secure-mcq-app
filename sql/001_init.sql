@@ -45,10 +45,12 @@ CREATE TABLE IF NOT EXISTS sessions (
   assessment_id UUID NOT NULL REFERENCES assessments(id),
   student_name TEXT NOT NULL,
   student_id TEXT NOT NULL,
+  student_email TEXT NOT NULL DEFAULT '',
   user_agent TEXT NOT NULL,
   screen_resolution TEXT NOT NULL,
   started_at TIMESTAMPTZ NOT NULL,
   expires_at TIMESTAMPTZ NOT NULL,
+  result_access_token UUID DEFAULT gen_random_uuid(),
   status TEXT NOT NULL DEFAULT 'active',
   submitted_at TIMESTAMPTZ,
   question_order JSONB NOT NULL,
@@ -80,6 +82,7 @@ CREATE TABLE IF NOT EXISTS submissions (
   assessment_id UUID NOT NULL REFERENCES assessments(id),
   student_name TEXT NOT NULL,
   student_id TEXT NOT NULL,
+  student_email TEXT NOT NULL DEFAULT '',
   score INTEGER NOT NULL,
   total INTEGER NOT NULL,
   percentage INTEGER NOT NULL,
@@ -191,6 +194,19 @@ ALTER TABLE sessions
   ADD COLUMN IF NOT EXISTS last_disconnect_at TIMESTAMPTZ,
   ADD COLUMN IF NOT EXISTS window_end_at TIMESTAMPTZ,
   ADD COLUMN IF NOT EXISTS terminated_reason TEXT;
+
+ALTER TABLE sessions
+  ADD COLUMN IF NOT EXISTS student_email TEXT NOT NULL DEFAULT '',
+  ADD COLUMN IF NOT EXISTS result_access_token UUID DEFAULT gen_random_uuid();
+
+ALTER TABLE submissions
+  ADD COLUMN IF NOT EXISTS student_email TEXT NOT NULL DEFAULT '';
+
+UPDATE sessions
+SET result_access_token = gen_random_uuid()
+WHERE result_access_token IS NULL;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_sessions_result_access_token ON sessions(result_access_token);
 
 CREATE INDEX IF NOT EXISTS idx_assessments_status_window ON assessments(status, window_start, window_end);
 CREATE INDEX IF NOT EXISTS idx_sessions_student_active ON sessions(assessment_id, student_id, status);

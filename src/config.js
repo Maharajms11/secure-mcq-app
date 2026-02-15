@@ -13,6 +13,16 @@ export const config = {
   jwtSecret: process.env.JWT_SECRET || "replace-me",
   adminPassword: process.env.ADMIN_PASSWORD || "change-me",
   adminPasswordHash: process.env.ADMIN_PASSWORD_HASH || "",
+  publicBaseUrl: process.env.PUBLIC_BASE_URL || "",
+  email: {
+    enabled: String(process.env.EMAIL_NOTIFICATIONS_ENABLED || "").toLowerCase() === "true",
+    from: process.env.SMTP_FROM || "",
+    host: process.env.SMTP_HOST || "",
+    port: Number(process.env.SMTP_PORT || 587),
+    secure: String(process.env.SMTP_SECURE || "").toLowerCase() === "true",
+    user: process.env.SMTP_USER || "",
+    pass: process.env.SMTP_PASS || ""
+  },
   defaults: {
     code: process.env.DEFAULT_ASSESSMENT_CODE || "ASSESS-2026",
     passcode: process.env.DEFAULT_ASSESSMENT_PASSCODE || "",

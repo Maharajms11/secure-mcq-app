@@ -1,6 +1,7 @@
 import { query, withTx } from "../db.js";
 import { config } from "../config.js";
 import { parseAikenText } from "../aiken.js";
+import { sendResultsReleasedEmail } from "../mailer.js";
 import { enforceRateLimit } from "../rate-limit.js";
 import {
   csvEscape,
@@ -117,6 +118,13 @@ function parseDateOrNull(value) {
   const d = new Date(value);
   if (Number.isNaN(d.getTime())) return null;
   return d;
+}
+
+function getPublicBaseUrl(request) {
+  if (config.publicBaseUrl) return String(config.publicBaseUrl).replace(/\/+$/, "");
+  const proto = String(request.headers["x-forwarded-proto"] || "https");
+  const host = String(request.headers["x-forwarded-host"] || request.headers.host || "");
+  return host ? `${proto}://${host}` : "";
 }
 
 function buildSubmissionExportSql(filter) {
@@ -489,7 +497,83 @@ export default async function adminRoutes(fastify) {
       [code, released]
     );
     if (!out.rows[0]) return reply.code(404).send({ error: "test_not_found" });
-    return out.rows[0];
+
+    if (!released) {
+      return { ...out.rows[0], notificationSummary: { notified: 0, failed: 0, skipped: 0 } };
+    }
+
+    await query(
+      `UPDATE sessions se
+       SET result_access_token = gen_random_uuid()
+       FROM assessments a
+       WHERE se.assessment_id = a.id
+         AND a.code = $1
+         AND se.result_access_token IS NULL`,
+      [code]
+    );
+
+    const recipientsOut = await query(
+      `SELECT se.student_name, se.student_email, se.result_access_token, su.submitted_at, a.title
+       FROM sessions se
+       JOIN submissions su ON su.session_token = se.token
+       JOIN assessments a ON a.id = se.assessment_id
+       WHERE a.code = $1
+         AND COALESCE(se.student_email, '') <> ''
+       ORDER BY su.submitted_at DESC`,
+      [code]
+    );
+
+    const byEmail = new Map();
+    for (const row of recipientsOut.rows) {
+      const email = sanitizeText(row.student_email || "").toLowerCase();
+      if (!email) continue;
+      if (!byEmail.has(email)) byEmail.set(email, row);
+    }
+    const recipients = [...byEmail.values()];
+    const baseUrl = getPublicBaseUrl(request);
+
+    let notified = 0;
+    let failed = 0;
+    let skipped = 0;
+
+    if (!baseUrl) {
+      skipped = recipients.length;
+    } else {
+      const settled = await Promise.allSettled(
+        recipients.map((row) => {
+          const access = String(row.result_access_token || "");
+          if (!access) {
+            return Promise.resolve({ sent: false, reason: "missing_access_token" });
+          }
+          const resultsUrl = `${baseUrl}/#/released-results?access=${encodeURIComponent(access)}`;
+          return sendResultsReleasedEmail({
+            to: row.student_email,
+            studentName: row.student_name,
+            testName: row.title || code,
+            resultsUrl
+          });
+        })
+      );
+      for (const entry of settled) {
+        if (entry.status === "fulfilled" && entry.value?.sent) {
+          notified += 1;
+        } else if (entry.status === "fulfilled" && entry.value?.reason) {
+          skipped += 1;
+        } else {
+          failed += 1;
+        }
+      }
+    }
+
+    return {
+      ...out.rows[0],
+      notificationSummary: {
+        recipients: recipients.length,
+        notified,
+        failed,
+        skipped
+      }
+    };
   });
 
   fastify.delete("/admin/tests/:code", { preHandler: fastify.adminAuth }, async (request, reply) => {
