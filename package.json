@@ -13,9 +13,11 @@
   "dependencies": {
     "@fastify/cors": "^10.0.1",
     "@fastify/jwt": "^9.0.1",
+    "@fastify/multipart": "^8.3.1",
     "dotenv": "^16.4.5",
     "fastify": "^5.0.0",
     "ioredis": "^5.4.1",
-    "pg": "^8.13.1"
+    "pg": "^8.13.1",
+    "xlsx": "^0.18.5"
   }
 }

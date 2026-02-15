@@ -17,6 +17,30 @@ export function sanitizeText(value) {
   return String(value || "").replace(/[<>`]/g, "").trim();
 }
 
+export function hashSecret(value) {
+  const input = String(value || "");
+  const salt = crypto.randomBytes(16).toString("hex");
+  const derived = crypto.scryptSync(input, salt, 64).toString("hex");
+  return `scrypt$${salt}$${derived}`;
+}
+
+export function verifySecret(value, storedHash) {
+  const input = String(value || "");
+  const hash = String(storedHash || "");
+  if (!hash.startsWith("scrypt$")) {
+    return hash === input;
+  }
+  const parts = hash.split("$");
+  if (parts.length !== 3) return false;
+  const salt = parts[1];
+  const expected = parts[2];
+  const actual = crypto.scryptSync(input, salt, 64).toString("hex");
+  const a = Buffer.from(actual, "hex");
+  const b = Buffer.from(expected, "hex");
+  if (a.length !== b.length) return false;
+  return crypto.timingSafeEqual(a, b);
+}
+
 export function randomUuid() {
   return crypto.randomUUID();
 }
@@ -43,5 +67,16 @@ export function parseJsonObjectOrEmpty(value) {
     return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
   } catch {
     return {};
+  }
+}
+
+export function parseJsonArrayOrEmpty(value) {
+  if (!value) return [];
+  if (Array.isArray(value)) return value;
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
   }
 }

@@ -125,6 +125,66 @@ const questions = [
   }
 ];
 
+function buildBankQuestions(bankCode, total = 20) {
+  const topics = ["Topic A", "Topic B", "Topic C", "Topic D"];
+  const difficulties = ["easy", "medium", "hard"];
+  const items = [];
+  for (let i = 1; i <= total; i += 1) {
+    const id = `${bankCode}_q${String(i).padStart(3, "0")}`;
+    const correctIndex = i % 4;
+    items.push({
+      id,
+      category: topics[i % topics.length],
+      difficulty: difficulties[i % difficulties.length],
+      stem: `${bankCode.toUpperCase()} question ${String(i).padStart(3, "0")}: Select the correct option for this generated test item.`,
+      explanation: `Auto-generated explanation for ${id}.`,
+      image: null,
+      distractors: [
+        { id: "a", text: "Option A", correct: correctIndex === 0 },
+        { id: "b", text: "Option B", correct: correctIndex === 1 },
+        { id: "c", text: "Option C", correct: correctIndex === 2 },
+        { id: "d", text: "Option D", correct: correctIndex === 3 }
+      ]
+    });
+  }
+  return items;
+}
+
+async function upsertBank(client, bankCode, bankName, bankQuestions) {
+  await client.query(
+    `INSERT INTO question_banks (code, name, description)
+     VALUES ($1, $2, $3)
+     ON CONFLICT (code) DO UPDATE SET name = EXCLUDED.name, description = EXCLUDED.description, updated_at = NOW()`,
+    [bankCode, bankName, `Generated seed bank: ${bankName}`]
+  );
+
+  for (const q of bankQuestions) {
+    await client.query(
+      "DELETE FROM bank_question_options WHERE bank_code = $1 AND question_id = $2",
+      [bankCode, q.id]
+    );
+    await client.query(
+      `INSERT INTO bank_questions (bank_code, id, category, difficulty, stem, explanation, image)
+       VALUES ($1,$2,$3,$4,$5,$6,$7)
+       ON CONFLICT (bank_code, id)
+       DO UPDATE SET category = EXCLUDED.category,
+                     difficulty = EXCLUDED.difficulty,
+                     stem = EXCLUDED.stem,
+                     explanation = EXCLUDED.explanation,
+                     image = EXCLUDED.image,
+                     updated_at = NOW()`,
+      [bankCode, q.id, q.category, q.difficulty, q.stem, q.explanation, q.image]
+    );
+    for (const d of q.distractors) {
+      await client.query(
+        `INSERT INTO bank_question_options (bank_code, question_id, option_key, option_text, is_correct)
+         VALUES ($1,$2,$3,$4,$5)`,
+        [bankCode, q.id, d.id, d.text, d.correct]
+      );
+    }
+  }
+}
+
 async function run() {
   const client = await pool.connect();
   try {
@@ -224,6 +284,11 @@ async function run() {
         );
       }
     }
+
+    // Additional test banks for multi-bank allocation testing.
+    await upsertBank(client, "ttest1", "ttest1", buildBankQuestions("ttest1", 20));
+    await upsertBank(client, "ttest2", "ttest2", buildBankQuestions("ttest2", 20));
+    await upsertBank(client, "ttest3", "ttest3", buildBankQuestions("ttest3", 20));
 
     await client.query("COMMIT");
     console.log("Seed complete.");

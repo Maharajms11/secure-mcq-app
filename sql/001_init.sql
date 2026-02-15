@@ -107,6 +107,7 @@ CREATE TABLE IF NOT EXISTS bank_questions (
   id TEXT NOT NULL,
   category TEXT NOT NULL,
   difficulty TEXT NOT NULL,
+  topic_tag TEXT,
   stem TEXT NOT NULL,
   explanation TEXT NOT NULL,
   image TEXT,
@@ -137,9 +138,57 @@ ALTER TABLE assessments
   ADD COLUMN IF NOT EXISTS assessment_date DATE;
 ALTER TABLE assessments
   ADD COLUMN IF NOT EXISTS dataset_allocations JSONB NOT NULL DEFAULT '[]'::jsonb;
+ALTER TABLE assessments
+  ADD COLUMN IF NOT EXISTS window_start TIMESTAMPTZ;
+ALTER TABLE assessments
+  ADD COLUMN IF NOT EXISTS window_end TIMESTAMPTZ;
+ALTER TABLE assessments
+  ADD COLUMN IF NOT EXISTS duration_minutes INTEGER;
+ALTER TABLE assessments
+  ADD COLUMN IF NOT EXISTS total_questions INTEGER;
+ALTER TABLE assessments
+  ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'draft';
+ALTER TABLE assessments
+  ADD COLUMN IF NOT EXISTS results_released BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE assessments
+  ADD COLUMN IF NOT EXISTS passcode_hash TEXT;
+
+UPDATE assessments
+SET duration_minutes = GREATEST(1, CEIL(duration_seconds / 60.0)::int)
+WHERE duration_minutes IS NULL;
+
+UPDATE assessments
+SET total_questions = draw_count
+WHERE total_questions IS NULL;
+
+UPDATE assessments
+SET status = CASE WHEN is_active THEN 'active' ELSE 'draft' END
+WHERE status IS NULL OR status = '';
+
+ALTER TABLE assessments
+  ALTER COLUMN duration_minutes SET NOT NULL;
+ALTER TABLE assessments
+  ALTER COLUMN total_questions SET NOT NULL;
+
+ALTER TABLE sessions
+  ADD COLUMN IF NOT EXISTS auth_user_id TEXT;
+ALTER TABLE sessions
+  ADD COLUMN IF NOT EXISTS disconnected_at TIMESTAMPTZ;
+ALTER TABLE sessions
+  ADD COLUMN IF NOT EXISTS termination_reason TEXT;
+ALTER TABLE sessions
+  ADD COLUMN IF NOT EXISTS draft_answers JSONB NOT NULL DEFAULT '{}'::jsonb;
+ALTER TABLE sessions
+  ADD COLUMN IF NOT EXISTS exam_window_end_at TIMESTAMPTZ;
 
 CREATE INDEX IF NOT EXISTS idx_assessments_bank_code ON assessments(bank_code);
 CREATE INDEX IF NOT EXISTS idx_bank_questions_bank_code ON bank_questions(bank_code);
+CREATE INDEX IF NOT EXISTS idx_assessments_status_window ON assessments(status, window_start, window_end);
+CREATE INDEX IF NOT EXISTS idx_bank_questions_bank_filters ON bank_questions(bank_code, difficulty, topic_tag);
+CREATE INDEX IF NOT EXISTS idx_sessions_status ON sessions(status);
+CREATE INDEX IF NOT EXISTS idx_sessions_student_assessment_status ON sessions(student_id, assessment_id, status);
+CREATE INDEX IF NOT EXISTS idx_sessions_started_at ON sessions(started_at DESC);
+CREATE INDEX IF NOT EXISTS idx_submissions_assessment_date ON submissions(assessment_id, submitted_at DESC);
 
 -- Backfill legacy global questions into default bank if this bank is empty.
 INSERT INTO bank_questions (bank_code, id, category, difficulty, stem, explanation, image)

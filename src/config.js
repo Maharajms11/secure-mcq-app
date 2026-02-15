@@ -12,6 +12,7 @@ export const config = {
   redisUrl: process.env.REDIS_URL || "redis://localhost:6379",
   jwtSecret: process.env.JWT_SECRET || "replace-me",
   adminPassword: process.env.ADMIN_PASSWORD || "change-me",
+  adminPasswordHash: process.env.ADMIN_PASSWORD_HASH || "",
   defaults: {
     code: process.env.DEFAULT_ASSESSMENT_CODE || "ASSESS-2026",
     passcode: process.env.DEFAULT_ASSESSMENT_PASSCODE || "",
