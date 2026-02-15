@@ -96,6 +96,51 @@
         { id: "q010", category: "History", difficulty: "medium", stem: "In which year did the First World War begin?", distractors: [{id:"a",text:"1916",correct:false},{id:"b",text:"1914",correct:true},{id:"c",text:"1918",correct:false},{id:"d",text:"1912",correct:false}], explanation: "World War I began in 1914 following the assassination of Archduke Franz Ferdinand.", image: null }
       ];
 
+      const DEFAULT_ADMIN_DRAFT = {
+        bankCode: "",
+        bankName: "",
+        uploadMode: "append",
+        testName: "",
+        testCode: "",
+        totalQuestions: 10,
+        durationMinutes: 60,
+        windowStart: "",
+        windowEnd: "",
+        status: "draft",
+        resultsReleased: false,
+        passcode: "",
+        allocations: [{ bankCode: "", count: 1 }]
+      };
+
+      function normalizeAdminDraft(raw) {
+        const src = raw && typeof raw === "object" ? raw : {};
+        const base = {
+          ...DEFAULT_ADMIN_DRAFT,
+          ...src
+        };
+        const allocations = Array.isArray(base.allocations) && base.allocations.length
+          ? base.allocations
+          : [{ bankCode: "", count: 1 }];
+        return {
+          bankCode: String(base.bankCode || ""),
+          bankName: String(base.bankName || ""),
+          uploadMode: base.uploadMode === "replace" ? "replace" : "append",
+          testName: String(base.testName || ""),
+          testCode: String(base.testCode || ""),
+          totalQuestions: Math.max(1, Number(base.totalQuestions || 10)),
+          durationMinutes: Math.max(1, Number(base.durationMinutes || 60)),
+          windowStart: toLocalDateTimeInputValue(base.windowStart || ""),
+          windowEnd: toLocalDateTimeInputValue(base.windowEnd || ""),
+          status: ["draft", "active", "closed"].includes(String(base.status || "draft")) ? String(base.status) : "draft",
+          resultsReleased: !!base.resultsReleased,
+          passcode: String(base.passcode || ""),
+          allocations: allocations.map((a) => ({
+            bankCode: String(a.bankCode || ""),
+            count: Math.max(1, Number(a.count || 1))
+          }))
+        };
+      }
+
       function parseRouteFromHash() {
         const hash = location.hash || "#/login";
         if (hash.startsWith("#/admin")) return { route: "admin", resultAccessToken: "" };
@@ -129,21 +174,7 @@
           analytics: [],
           uploadSummary: null
         },
-        adminDraft: {
-          bankCode: "",
-          bankName: "",
-          uploadMode: "append",
-          testName: "",
-          testCode: "",
-          totalQuestions: 10,
-          durationMinutes: 60,
-          windowStart: "",
-          windowEnd: "",
-          status: "draft",
-          resultsReleased: false,
-          passcode: "",
-          allocations: [{ bankCode: "", count: 1 }]
-        },
+        adminDraft: normalizeAdminDraft(loadJSON("mcq_admin_draft", DEFAULT_ADMIN_DRAFT)),
         session: null,
         violations: [],
         selectedOptionId: null,
@@ -307,12 +338,60 @@
         return "unknown_error";
       }
 
+      function persistAdminDraft() {
+        saveJSON("mcq_admin_draft", state.adminDraft);
+      }
+
+      function slugFromBankCode(value) {
+        return sanitizeInput(value || "")
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, "_")
+          .replace(/^_+|_+$/g, "")
+          .replace(/_+/g, "_");
+      }
+
+      function titleFromSlug(slug) {
+        return String(slug || "")
+          .split(/[_-]+/)
+          .filter(Boolean)
+          .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+          .join(" ");
+      }
+
+      function deriveAdminFieldsFromBankCode(value) {
+        const bankCode = slugFromBankCode(value);
+        if (!bankCode) {
+          return { bankCode: "", bankName: "", testName: "", testCode: "", passcode: "" };
+        }
+        const bankName = titleFromSlug(bankCode);
+        return {
+          bankCode,
+          bankName,
+          testName: `${bankName} Test`,
+          testCode: `${bankCode}-test`,
+          passcode: `${bankCode}-pass`
+        };
+      }
+
       function localDateTimeInputToIso(value) {
         const raw = String(value || "").trim();
         if (!raw) return "";
         const d = new Date(raw);
         if (Number.isNaN(d.getTime())) return "";
         return d.toISOString();
+      }
+
+      function toLocalDateTimeInputValue(value) {
+        const raw = String(value || "").trim();
+        if (!raw) return "";
+        const d = new Date(raw);
+        if (Number.isNaN(d.getTime())) return "";
+        const yyyy = d.getFullYear();
+        const mm = String(d.getMonth() + 1).padStart(2, "0");
+        const dd = String(d.getDate()).padStart(2, "0");
+        const hh = String(d.getHours()).padStart(2, "0");
+        const mi = String(d.getMinutes()).padStart(2, "0");
+        return `${yyyy}-${mm}-${dd}T${hh}:${mi}`;
       }
 
 
@@ -1089,6 +1168,81 @@
           if (!(state.adminData.banks || []).length && state.adminToken) {
             refreshAdminData().then(() => render()).catch(() => {});
           }
+
+          const readAllocationsFromDom = () => {
+            const allocRows = [...document.querySelectorAll("[data-alloc-row]")];
+            const rows = allocRows.map((row) => ({
+              bankCode: sanitizeInput(row.querySelector(".alloc-bank")?.value || ""),
+              count: Number(row.querySelector(".alloc-count")?.value || 0)
+            })).filter((r) => r.bankCode && Number.isInteger(r.count) && r.count > 0);
+            return rows.length ? rows : [{ bankCode: "", count: 1 }];
+          };
+
+          const captureAdminDraftFromForm = (includeAllocations = true) => {
+            const next = normalizeAdminDraft({
+              ...state.adminDraft,
+              bankCode: slugFromBankCode(document.getElementById("bankCodeInput")?.value || state.adminDraft.bankCode),
+              bankName: sanitizeInput(document.getElementById("bankNameInput")?.value || state.adminDraft.bankName),
+              uploadMode: document.getElementById("bankUploadMode")?.value || state.adminDraft.uploadMode,
+              testName: sanitizeInput(document.getElementById("testNameInput")?.value || state.adminDraft.testName),
+              testCode: sanitizeInput(document.getElementById("testCodeInput")?.value || state.adminDraft.testCode),
+              totalQuestions: Number(document.getElementById("totalQuestionsInput")?.value || state.adminDraft.totalQuestions),
+              durationMinutes: Number(document.getElementById("durationInput")?.value || state.adminDraft.durationMinutes),
+              windowStart: document.getElementById("windowStartInput")?.value || state.adminDraft.windowStart,
+              windowEnd: document.getElementById("windowEndInput")?.value || state.adminDraft.windowEnd,
+              status: document.getElementById("testStatusInput")?.value || state.adminDraft.status,
+              resultsReleased: !!document.getElementById("resultsReleasedInput")?.checked,
+              passcode: sanitizeInput(document.getElementById("testPasscodeInput")?.value || state.adminDraft.passcode),
+              allocations: includeAllocations ? readAllocationsFromDom() : state.adminDraft.allocations
+            });
+            state.adminDraft = next;
+            persistAdminDraft();
+            return next;
+          };
+
+          const applyBankCodeAutoPopulate = () => {
+            const raw = document.getElementById("bankCodeInput")?.value || "";
+            const suggested = deriveAdminFieldsFromBankCode(raw);
+            state.adminDraft = normalizeAdminDraft({
+              ...state.adminDraft,
+              ...suggested
+            });
+            persistAdminDraft();
+            render();
+          };
+
+          const persistDraftOnly = () => {
+            captureAdminDraftFromForm(true);
+          };
+
+          const bankCodeInput = document.getElementById("bankCodeInput");
+          if (bankCodeInput) {
+            bankCodeInput.onchange = applyBankCodeAutoPopulate;
+            bankCodeInput.onblur = applyBankCodeAutoPopulate;
+          }
+
+          const draftPersistInputs = [
+            "bankNameInput",
+            "bankUploadMode",
+            "testNameInput",
+            "testCodeInput",
+            "totalQuestionsInput",
+            "durationInput",
+            "windowStartInput",
+            "windowEndInput",
+            "testStatusInput",
+            "resultsReleasedInput",
+            "testPasscodeInput"
+          ];
+          draftPersistInputs.forEach((id) => {
+            const el = document.getElementById(id);
+            if (!el) return;
+            el.onchange = persistDraftOnly;
+            if (el.tagName === "INPUT" || el.tagName === "TEXTAREA") {
+              el.oninput = persistDraftOnly;
+            }
+          });
+
           document.getElementById("adminLogout").onclick = () => {
             state.adminAuthed = false;
             state.adminToken = "";
@@ -1119,12 +1273,9 @@
           };
           const updateAllocUi = () => {
             const totalQuestions = Number(document.getElementById("totalQuestionsInput")?.value || 0);
-            const allocRows = [...document.querySelectorAll("[data-alloc-row]")];
-            const allocations = allocRows.map((row) => ({
-              bankCode: sanitizeInput(row.querySelector(".alloc-bank")?.value || ""),
-              count: Number(row.querySelector(".alloc-count")?.value || 0)
-            })).filter((r) => r.bankCode && Number.isInteger(r.count) && r.count > 0);
-            state.adminDraft.allocations = allocations.length ? allocations : [{ bankCode: "", count: 1 }];
+            const allocations = readAllocationsFromDom();
+            state.adminDraft.allocations = allocations;
+            persistAdminDraft();
             const sum = allocations.reduce((s, a) => s + a.count, 0);
             const totalEl = document.getElementById("allocTotal");
             if (totalEl) totalEl.textContent = String(sum);
@@ -1137,6 +1288,7 @@
           };
           document.getElementById("addAllocBtn").onclick = () => {
             state.adminDraft.allocations = (state.adminDraft.allocations || []).concat([{ bankCode: "", count: 1 }]);
+            persistAdminDraft();
             render();
           };
           document.querySelectorAll(".alloc-count").forEach((el) => { el.oninput = updateAllocUi; });
@@ -1150,6 +1302,7 @@
               const index = Number(row?.getAttribute("data-alloc-row"));
               state.adminDraft.allocations = (state.adminDraft.allocations || []).filter((_, i) => i !== index);
               if (!state.adminDraft.allocations.length) state.adminDraft.allocations = [{ bankCode: "", count: 1 }];
+              persistAdminDraft();
               render();
             };
           });
@@ -1187,9 +1340,16 @@
               return;
             }
             const fileText = await file.text();
-            const bankCode = sanitizeInput(document.getElementById("bankCodeInput").value);
+            const bankCode = slugFromBankCode(document.getElementById("bankCodeInput").value);
             const bankName = sanitizeInput(document.getElementById("bankNameInput").value);
             const mode = document.getElementById("bankUploadMode").value;
+            state.adminDraft = normalizeAdminDraft({
+              ...state.adminDraft,
+              bankCode,
+              bankName,
+              uploadMode: mode
+            });
+            persistAdminDraft();
             try {
               const response = await adminApiFetch("/admin/banks/upload", {
                 method: "POST",
@@ -1203,11 +1363,7 @@
             }
           };
           document.getElementById("saveTestBtn").onclick = async () => {
-            const allocRows = [...document.querySelectorAll("[data-alloc-row]")];
-            const allocations = allocRows.map((row) => ({
-              bankCode: sanitizeInput(row.querySelector(".alloc-bank")?.value || ""),
-              count: Number(row.querySelector(".alloc-count")?.value || 0)
-            })).filter((r) => r.bankCode && Number.isInteger(r.count) && r.count > 0);
+            const allocations = readAllocationsFromDom();
 
             const payload = {
               testName: sanitizeInput(document.getElementById("testNameInput").value),
@@ -1221,22 +1377,23 @@
               passcode: sanitizeInput(document.getElementById("testPasscodeInput").value),
               bankAllocations: allocations
             };
-            state.adminDraft = {
+            state.adminDraft = normalizeAdminDraft({
               ...state.adminDraft,
-              bankCode: sanitizeInput(document.getElementById("bankCodeInput").value),
+              bankCode: slugFromBankCode(document.getElementById("bankCodeInput").value),
               bankName: sanitizeInput(document.getElementById("bankNameInput").value),
               uploadMode: document.getElementById("bankUploadMode").value,
               testName: payload.testName,
               testCode: payload.code,
               totalQuestions: payload.totalQuestions,
               durationMinutes: payload.durationMinutes,
-              windowStart: payload.windowStart,
-              windowEnd: payload.windowEnd,
+              windowStart: document.getElementById("windowStartInput").value || "",
+              windowEnd: document.getElementById("windowEndInput").value || "",
               status: payload.status,
               resultsReleased: payload.resultsReleased,
               passcode: payload.passcode,
               allocations
-            };
+            });
+            persistAdminDraft();
 
             if (allocations.reduce((s, a) => s + a.count, 0) !== payload.totalQuestions) {
               alert("Allocation total must equal total questions.");
