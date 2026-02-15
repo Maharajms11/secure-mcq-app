@@ -267,15 +267,16 @@ export default async function assessmentRoutes(fastify) {
     }
 
     const body = request.body || {};
-    const fullName = sanitizeText(body.fullName);
+    const fullName = sanitizeText(body.fullName || "");
     const studentId = sanitizeText(body.studentId);
     const studentEmail = sanitizeText(body.email || body.studentEmail || "");
     const passcode = sanitizeText(body.passcode || "");
     const assessmentCode = sanitizeText(body.assessmentCode || "");
 
-    if (!fullName || !studentId) {
-      return reply.code(400).send({ error: "fullName_and_studentId_required" });
+    if (!studentId) {
+      return reply.code(400).send({ error: "studentId_required" });
     }
+    const resolvedFullName = fullName || `Student ${studentId}`;
 
     const assessmentRes = await query(
       `SELECT *
@@ -478,7 +479,7 @@ export default async function assessmentRoutes(fastify) {
         token,
         seed,
         assessment.id,
-        fullName,
+        resolvedFullName,
         studentId,
         studentEmail,
         request.headers["user-agent"] || "unknown",

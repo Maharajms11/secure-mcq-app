@@ -754,7 +754,7 @@
             seed: start.seed,
             authToken: start.sessionAuthToken,
             identity: {
-              fullName: sanitizeInput(identity.fullName),
+              fullName: sanitizeInput(identity.fullName) || `Student ${id}`,
               studentId: id,
               email: sanitizeInput(identity.email || "")
             },
@@ -1600,7 +1600,7 @@
               </div>
               <div class="bg-white rounded-xl shadow p-5 space-y-3">
                 <h2 class="text-xl font-semibold">Identity Capture</h2>
-                <input id="fullName" class="w-full border rounded p-2" placeholder="Full Name">
+                <input id="fullName" class="w-full border rounded p-2" placeholder="Full Name (optional)">
                 <input id="studentId" class="w-full border rounded p-2" placeholder="Student/Employee ID">
                 <input id="studentEmail" type="text" class="w-full border rounded p-2" placeholder="Email address (for result notification)">
                 <input id="assessmentCode" class="w-full border rounded p-2" placeholder="Assessment Code (leave blank to use active test)">
@@ -1620,8 +1620,8 @@
             const passcode = sanitizeInput(document.getElementById("passcode").value);
             const honest = document.getElementById("honesty").checked;
 
-            if (!fullName || !studentId || !honest) {
-              alert("Please complete name, ID, and honesty confirmation.");
+            if (!studentId || !honest) {
+              alert("Please complete student ID and honesty confirmation.");
               return;
             }
             state.pendingIdentity = { fullName, studentId, email, assessmentCode, passcode };
