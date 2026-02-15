@@ -33,6 +33,12 @@
 
 ### Admin
 - `POST /api/admin/login`
+- `GET /api/admin/banks`
+- `POST /api/admin/banks`
+- `POST /api/admin/banks/:code/import`
+- `GET /api/admin/tests`
+- `POST /api/admin/tests`
+- `POST /api/admin/tests/:code/activate`
 - `GET /api/admin/config`
 - `PUT /api/admin/config`
 - `GET /api/admin/questions`

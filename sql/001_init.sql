@@ -133,6 +133,10 @@ ON CONFLICT (code) DO NOTHING;
 
 ALTER TABLE assessments
   ADD COLUMN IF NOT EXISTS bank_code TEXT NOT NULL DEFAULT 'default';
+ALTER TABLE assessments
+  ADD COLUMN IF NOT EXISTS assessment_date DATE;
+ALTER TABLE assessments
+  ADD COLUMN IF NOT EXISTS dataset_allocations JSONB NOT NULL DEFAULT '[]'::jsonb;
 
 CREATE INDEX IF NOT EXISTS idx_assessments_bank_code ON assessments(bank_code);
 CREATE INDEX IF NOT EXISTS idx_bank_questions_bank_code ON bank_questions(bank_code);

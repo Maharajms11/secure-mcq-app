@@ -52,6 +52,36 @@ function pickQuestions(questionRows, drawCount, questionsPerCategory) {
   return fisherYates(selected).slice(0, Math.min(drawCount, questionRows.length));
 }
 
+function parseDatasetAllocations(value) {
+  const arr = Array.isArray(value) ? value : [];
+  return arr
+    .map((x) => ({
+      bankCode: sanitizeText(x.bankCode || x.bank_code || "").toLowerCase(),
+      count: Math.max(0, Number(x.count || 0))
+    }))
+    .filter((x) => x.bankCode && x.count > 0);
+}
+
+async function fetchBankQuestions(bankCode) {
+  const questionsRes = await query(
+    `SELECT q.id, q.category, q.difficulty, q.stem, q.explanation, q.image,
+            COALESCE(json_agg(json_build_object(
+              'option_key', o.option_key,
+              'option_text', o.option_text,
+              'is_correct', o.is_correct
+            ) ORDER BY o.option_key) FILTER (WHERE o.option_key IS NOT NULL), '[]'::json) AS options
+     FROM bank_questions q
+     LEFT JOIN bank_question_options o
+       ON o.bank_code = q.bank_code
+      AND o.question_id = q.id
+     WHERE q.bank_code = $1
+     GROUP BY q.id, q.category, q.difficulty, q.stem, q.explanation, q.image
+     ORDER BY q.id`,
+    [bankCode]
+  );
+  return questionsRes.rows;
+}
+
 function toQuestionForClient(session, index) {
   const question = session.questions_snapshot?.[index];
   if (!question) return null;
@@ -185,7 +215,7 @@ export default async function assessmentRoutes(fastify) {
     const out = await query(
       `SELECT code, title, duration_seconds, draw_count, show_post_review,
               fullscreen_enforcement, tab_warn_threshold, tab_autosubmit_threshold,
-              allow_retakes, integrity_notice, bank_code
+              allow_retakes, integrity_notice, bank_code, dataset_allocations, assessment_date
        FROM assessments
        WHERE is_active = true
        ORDER BY created_at DESC
@@ -230,29 +260,29 @@ export default async function assessmentRoutes(fastify) {
     }
 
     const bankCode = sanitizeText(assessment.bank_code || "default");
-    const questionsRes = await query(
-      `SELECT q.id, q.category, q.difficulty, q.stem, q.explanation, q.image,
-              COALESCE(json_agg(json_build_object(
-                'option_key', o.option_key,
-                'option_text', o.option_text,
-                'is_correct', o.is_correct
-              ) ORDER BY o.option_key) FILTER (WHERE o.option_key IS NOT NULL), '[]'::json) AS options
-       FROM bank_questions q
-       LEFT JOIN bank_question_options o
-         ON o.bank_code = q.bank_code
-        AND o.question_id = q.id
-       WHERE q.bank_code = $1
-       GROUP BY q.id, q.category, q.difficulty, q.stem, q.explanation, q.image
-       ORDER BY q.id`
-      ,
-      [bankCode]
-    );
+    const drawCount = Number(assessment.draw_count);
+    const allocations = parseDatasetAllocations(assessment.dataset_allocations);
+    let selectedQuestions = [];
 
-    const selectedQuestions = pickQuestions(
-      questionsRes.rows,
-      Number(assessment.draw_count),
-      assessment.questions_per_category
-    );
+    if (allocations.length) {
+      for (const part of allocations) {
+        const rows = await fetchBankQuestions(part.bankCode);
+        const picked = fisherYates(rows).slice(0, Math.min(part.count, rows.length));
+        selectedQuestions.push(...picked);
+      }
+      selectedQuestions = fisherYates(selectedQuestions).slice(0, drawCount);
+      if (selectedQuestions.length < drawCount) {
+        const fallbackRows = await fetchBankQuestions(bankCode);
+        const pickedIds = new Set(selectedQuestions.map((q) => `${q.id}|${q.stem}`));
+        const fallback = fisherYates(
+          fallbackRows.filter((q) => !pickedIds.has(`${q.id}|${q.stem}`))
+        ).slice(0, drawCount - selectedQuestions.length);
+        selectedQuestions.push(...fallback);
+      }
+    } else {
+      const rows = await fetchBankQuestions(bankCode);
+      selectedQuestions = pickQuestions(rows, drawCount, assessment.questions_per_category);
+    }
 
     if (!selectedQuestions.length) {
       return reply.code(400).send({ error: "question_bank_empty" });
@@ -307,7 +337,9 @@ export default async function assessmentRoutes(fastify) {
         tabAutosubmitThreshold: assessment.tab_autosubmit_threshold,
         allowRetakes: assessment.allow_retakes,
         integrityNotice: assessment.integrity_notice,
-        bankCode
+        bankCode,
+        datasetAllocations: allocations,
+        assessmentDate: assessment.assessment_date
       }
     };
   });

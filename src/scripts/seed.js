@@ -140,8 +140,8 @@ async function run() {
       `INSERT INTO assessments (
          code, title, passcode, duration_seconds, draw_count, questions_per_category,
          show_post_review, fullscreen_enforcement, tab_warn_threshold, tab_autosubmit_threshold,
-         allow_retakes, integrity_notice, is_active, bank_code
-       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,true,$13)
+         allow_retakes, integrity_notice, is_active, bank_code, dataset_allocations, assessment_date
+       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,true,$13,$14,$15)
        ON CONFLICT (code)
        DO UPDATE SET title = EXCLUDED.title,
                      passcode = EXCLUDED.passcode,
@@ -154,6 +154,8 @@ async function run() {
                      tab_autosubmit_threshold = EXCLUDED.tab_autosubmit_threshold,
                      allow_retakes = EXCLUDED.allow_retakes,
                      bank_code = EXCLUDED.bank_code,
+                     dataset_allocations = EXCLUDED.dataset_allocations,
+                     assessment_date = EXCLUDED.assessment_date,
                      integrity_notice = EXCLUDED.integrity_notice,
                      updated_at = NOW()`,
       [
@@ -169,7 +171,9 @@ async function run() {
         config.defaults.tabAutosubmitThreshold,
         config.defaults.allowRetakes,
         INTEGRITY_NOTICE,
-        "default"
+        "default",
+        JSON.stringify([]),
+        new Date().toISOString().slice(0, 10)
       ]
     );
 
