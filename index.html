@@ -1487,7 +1487,21 @@
                 });
                 if (willRelease && updated?.notificationSummary) {
                   const s = updated.notificationSummary;
-                  alert(`Results released.\nEmail notifications: sent ${s.notified}, skipped ${s.skipped}, failed ${s.failed}.`);
+                  const failed = Array.isArray(s.failedDetails) ? s.failedDetails : [];
+                  const skipped = Array.isArray(s.skippedDetails) ? s.skippedDetails : [];
+                  const lines = [
+                    "Results released.",
+                    `Email notifications: sent ${s.notified}, skipped ${s.skipped}, failed ${s.failed}.`
+                  ];
+                  if (failed.length) {
+                    lines.push("", "Failed details:");
+                    lines.push(...failed.slice(0, 5));
+                  }
+                  if (skipped.length) {
+                    lines.push("", "Skipped details:");
+                    lines.push(...skipped.slice(0, 5));
+                  }
+                  alert(lines.join("\n"));
                 }
                 await refreshAdminData();
                 render();

@@ -127,6 +127,19 @@ function getPublicBaseUrl(request) {
   return host ? `${proto}://${host}` : "";
 }
 
+function summarizeError(err) {
+  if (!err) return "unknown_error";
+  if (typeof err === "string") return err;
+  if (err?.response) return String(err.response);
+  if (err?.code && err?.message) return `${err.code}: ${err.message}`;
+  if (err?.message) return String(err.message);
+  try {
+    return JSON.stringify(err);
+  } catch {
+    return "unknown_error";
+  }
+}
+
 function buildSubmissionExportSql(filter) {
   const params = [];
   const clauses = [];
@@ -535,9 +548,12 @@ export default async function adminRoutes(fastify) {
     let notified = 0;
     let failed = 0;
     let skipped = 0;
+    const failedDetails = [];
+    const skippedDetails = [];
 
     if (!baseUrl) {
       skipped = recipients.length;
+      skippedDetails.push("PUBLIC_BASE_URL missing or invalid");
     } else {
       const settled = await Promise.allSettled(
         recipients.map((row) => {
@@ -554,13 +570,20 @@ export default async function adminRoutes(fastify) {
           });
         })
       );
-      for (const entry of settled) {
+      for (let i = 0; i < settled.length; i += 1) {
+        const entry = settled[i];
+        const recipient = recipients[i];
+        const email = String(recipient?.student_email || "");
         if (entry.status === "fulfilled" && entry.value?.sent) {
           notified += 1;
         } else if (entry.status === "fulfilled" && entry.value?.reason) {
           skipped += 1;
+          skippedDetails.push(`${email}: ${entry.value.reason}`);
         } else {
           failed += 1;
+          const reason = summarizeError(entry.status === "rejected" ? entry.reason : entry.value);
+          failedDetails.push(`${email}: ${reason}`);
+          fastify.log.error({ err: entry.status === "rejected" ? entry.reason : entry.value, email, code }, "email notification failed");
         }
       }
     }
@@ -571,7 +594,9 @@ export default async function adminRoutes(fastify) {
         recipients: recipients.length,
         notified,
         failed,
-        skipped
+        skipped,
+        failedDetails: failedDetails.slice(0, 20),
+        skippedDetails: skippedDetails.slice(0, 20)
       }
     };
   });
