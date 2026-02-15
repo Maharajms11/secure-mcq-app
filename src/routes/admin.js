@@ -222,6 +222,35 @@ export default async function adminRoutes(fastify) {
     return { ok: true, code: bankCode };
   });
 
+  fastify.post("/admin/banks/:code/clear", { preHandler: fastify.adminAuth }, async (request, reply) => {
+    const bankCode = normalizeBankCode(request.params.code || "");
+    if (!bankCode) return reply.code(400).send({ error: "bank_code_required" });
+    if (bankCode === "default") return reply.code(400).send({ error: "default_bank_cannot_be_cleared" });
+
+    const refs = await query(
+      `SELECT COUNT(*)::int AS count
+       FROM assessments a
+       WHERE a.bank_code = $1
+          OR EXISTS (
+            SELECT 1
+            FROM jsonb_array_elements(a.bank_allocations) alloc
+            WHERE alloc->>'bankCode' = $1
+          )`,
+      [bankCode]
+    );
+    if ((refs.rows[0]?.count || 0) > 0) {
+      return reply.code(409).send({ error: "bank_in_use_by_test_configs" });
+    }
+
+    const cleared = await withTx(async (client) => {
+      const options = await client.query("DELETE FROM bank_question_options WHERE bank_code = $1", [bankCode]);
+      const questions = await client.query("DELETE FROM bank_questions WHERE bank_code = $1", [bankCode]);
+      return { optionsDeleted: options.rowCount || 0, questionsDeleted: questions.rowCount || 0 };
+    });
+
+    return { ok: true, code: bankCode, ...cleared };
+  });
+
   fastify.post("/admin/banks/upload", { preHandler: fastify.adminAuth }, async (request, reply) => {
     const bankCode = normalizeBankCode(request.body?.bankCode || request.body?.bank_name || "");
     const bankName = sanitizeText(request.body?.bankName || request.body?.bank_name || bankCode);
@@ -481,6 +510,22 @@ export default async function adminRoutes(fastify) {
 
     if (deleted.notFound) return reply.code(404).send({ error: "test_not_found" });
     return { ok: true, code };
+  });
+
+  fastify.post("/admin/tests/:code/clear-attempts", { preHandler: fastify.adminAuth }, async (request, reply) => {
+    const code = normalizeTestCode(request.params.code || "");
+    if (!code) return reply.code(400).send({ error: "test_code_required" });
+
+    const summary = await withTx(async (client) => {
+      const test = await client.query("SELECT id FROM assessments WHERE code = $1", [code]);
+      if (!test.rows[0]) return { notFound: true };
+      const assessmentId = test.rows[0].id;
+      const sessions = await client.query("DELETE FROM sessions WHERE assessment_id = $1", [assessmentId]);
+      return { notFound: false, sessionsDeleted: sessions.rowCount || 0 };
+    });
+
+    if (summary.notFound) return reply.code(404).send({ error: "test_not_found" });
+    return { ok: true, code, sessionsDeleted: summary.sessionsDeleted };
   });
 
   fastify.post("/admin/reset-uploaded-data", { preHandler: fastify.adminAuth }, async (request, reply) => {

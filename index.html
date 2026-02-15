@@ -946,7 +946,7 @@
                 ${state.adminData.uploadSummary ? `<pre class="text-xs bg-gray-50 border rounded p-2 overflow-x-auto">${escapeHtml(JSON.stringify(state.adminData.uploadSummary, null, 2))}</pre>` : ""}
                 <div class="text-sm text-gray-700">
                   <p class="font-semibold mb-1">Bank list</p>
-                  ${(banks || []).map((b) => `<div class="flex items-center justify-between border rounded p-2 mb-2"><span>${escapeHtml(b.code)} - ${escapeHtml(b.name)} (${b.question_count})</span><button data-del-bank="${escapeHtml(b.code)}" class="px-2 py-1 rounded bg-red-600 text-white text-xs">Delete</button></div>`).join("") || "<p>No banks yet.</p>"}
+                  ${(banks || []).map((b) => `<div class="flex items-center justify-between border rounded p-2 mb-2"><span>${escapeHtml(b.code)} - ${escapeHtml(b.name)} (${b.question_count})</span><span class="flex gap-2"><button data-clear-bank="${escapeHtml(b.code)}" class="px-2 py-1 rounded bg-amber-600 text-white text-xs">Clear Questions</button><button data-del-bank="${escapeHtml(b.code)}" class="px-2 py-1 rounded bg-red-600 text-white text-xs">Delete Bank</button></span></div>`).join("") || "<p>No banks yet.</p>"}
                 </div>
               </div>
 
@@ -985,7 +985,7 @@
 
             <div class="bg-white rounded-xl shadow p-4 space-y-2">
               <h2 class="text-xl font-semibold">Saved Test Configurations</h2>
-              ${(tests || []).map((t) => `<div class="border rounded p-3 mb-2"><div class="font-semibold">${escapeHtml(t.code)} - ${escapeHtml(t.test_name || t.title)}</div><div class="text-sm text-gray-700">Questions: ${t.total_questions || t.draw_count}, Duration: ${t.duration_minutes}m, Window: ${new Date(t.window_start).toLocaleString()} → ${new Date(t.window_end).toLocaleString()}, Status: ${escapeHtml(t.status)}, Released: ${t.results_released ? "yes" : "no"}</div><div class="mt-2 flex gap-2"><button data-activate-test="${escapeHtml(t.code)}" class="px-2 py-1 rounded bg-emerald-700 text-white text-xs">Set Active</button><button data-close-test="${escapeHtml(t.code)}" class="px-2 py-1 rounded bg-slate-700 text-white text-xs">Set Closed</button><button data-release-test="${escapeHtml(t.code)}" class="px-2 py-1 rounded bg-indigo-700 text-white text-xs">${t.results_released ? "Hide Results" : "Release Results"}</button><button data-delete-test="${escapeHtml(t.code)}" class="px-2 py-1 rounded bg-red-700 text-white text-xs">Delete Test</button></div></div>`).join("") || "<p>No test configs yet.</p>"}
+              ${(tests || []).map((t) => `<div class="border rounded p-3 mb-2"><div class="font-semibold">${escapeHtml(t.code)} - ${escapeHtml(t.test_name || t.title)}</div><div class="text-sm text-gray-700">Questions: ${t.total_questions || t.draw_count}, Duration: ${t.duration_minutes}m, Window: ${new Date(t.window_start).toLocaleString()} → ${new Date(t.window_end).toLocaleString()}, Status: ${escapeHtml(t.status)}, Released: ${t.results_released ? "yes" : "no"}</div><div class="mt-2 flex gap-2"><button data-activate-test="${escapeHtml(t.code)}" class="px-2 py-1 rounded bg-emerald-700 text-white text-xs">Set Active</button><button data-close-test="${escapeHtml(t.code)}" class="px-2 py-1 rounded bg-slate-700 text-white text-xs">Set Closed</button><button data-release-test="${escapeHtml(t.code)}" class="px-2 py-1 rounded bg-indigo-700 text-white text-xs">${t.results_released ? "Hide Results" : "Release Results"}</button><button data-clear-test-attempts="${escapeHtml(t.code)}" class="px-2 py-1 rounded bg-amber-700 text-white text-xs">Clear Attempts</button><button data-delete-test="${escapeHtml(t.code)}" class="px-2 py-1 rounded bg-red-700 text-white text-xs">Delete Test</button></div></div>`).join("") || "<p>No test configs yet.</p>"}
             </div>
 
             <div class="bg-white rounded-xl shadow p-4 space-y-3">
@@ -1122,6 +1122,19 @@
               }
             };
           });
+          document.querySelectorAll("[data-clear-bank]").forEach((btn) => {
+            btn.onclick = async () => {
+              const code = btn.getAttribute("data-clear-bank");
+              if (!confirm(`Clear all questions from bank '${code}'?`)) return;
+              try {
+                await adminApiFetch(`/admin/banks/${encodeURIComponent(code)}/clear`, { method: "POST" });
+                await refreshAdminData();
+                render();
+              } catch (err) {
+                alert(`Unable to clear bank: ${humanizeError(err)}`);
+              }
+            };
+          });
           document.getElementById("uploadBankBtn").onclick = async () => {
             const fileEl = document.getElementById("bankFileInput");
             const file = fileEl.files && fileEl.files[0];
@@ -1254,6 +1267,19 @@
                 render();
               } catch (err) {
                 alert(`Unable to delete test: ${humanizeError(err)}`);
+              }
+            };
+          });
+          document.querySelectorAll("[data-clear-test-attempts]").forEach((btn) => {
+            btn.onclick = async () => {
+              const code = btn.getAttribute("data-clear-test-attempts");
+              if (!confirm(`Clear all attempts/results for test '${code}' but keep the config?`)) return;
+              try {
+                await adminApiFetch(`/admin/tests/${encodeURIComponent(code)}/clear-attempts`, { method: "POST" });
+                await refreshAdminData();
+                render();
+              } catch (err) {
+                alert(`Unable to clear attempts: ${humanizeError(err)}`);
               }
             };
           });
