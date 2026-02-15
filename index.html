@@ -342,34 +342,41 @@
         saveJSON("mcq_admin_draft", state.adminDraft);
       }
 
-      function slugFromBankCode(value) {
-        return sanitizeInput(value || "")
-          .toLowerCase()
-          .replace(/[^a-z0-9]+/g, "_")
-          .replace(/^_+|_+$/g, "")
-          .replace(/_+/g, "_");
-      }
-
-      function titleFromSlug(slug) {
-        return String(slug || "")
-          .split(/[_-]+/)
-          .filter(Boolean)
-          .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
-          .join(" ");
+      function randomSuffix(len = 2) {
+        const chars = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789";
+        let out = "";
+        for (let i = 0; i < len; i += 1) {
+          out += chars[Math.floor(Math.random() * chars.length)];
+        }
+        return out;
       }
 
       function deriveAdminFieldsFromBankCode(value) {
-        const bankCode = slugFromBankCode(value);
-        if (!bankCode) {
+        const raw = sanitizeInput(value || "");
+        const tokens = raw.split(/\s+/).filter(Boolean);
+        const firstWord = tokens[0] || "";
+        const numberMatch = raw.match(/\d+/g);
+        const trailingNumber = numberMatch ? numberMatch[numberMatch.length - 1] : "";
+
+        if (!firstWord) {
           return { bankCode: "", bankName: "", testName: "", testCode: "", passcode: "" };
         }
-        const bankName = titleFromSlug(bankCode);
+
+        const firstWordTitle = firstWord.charAt(0).toUpperCase() + firstWord.slice(1).toLowerCase();
+        const cy = firstWordTitle.slice(0, 2) || firstWordTitle.slice(0, 1);
+        const c = firstWordTitle.slice(0, 1);
+        const numberPart = trailingNumber || "";
+        const bankName = `${firstWordTitle}${numberPart}`;
+        const testName = `${c}Test${numberPart}`;
+        const testCode = `${cy}test${numberPart}`;
+        const passcode = `${cy}TeSt${numberPart}${randomSuffix(2)}`;
+
         return {
-          bankCode,
+          bankCode: raw,
           bankName,
-          testName: `${bankName} Test`,
-          testCode: `${bankCode}-test`,
-          passcode: `${bankCode}-pass`
+          testName,
+          testCode,
+          passcode
         };
       }
 
@@ -1182,7 +1189,7 @@
           const captureAdminDraftFromForm = (includeAllocations = true) => {
             const next = normalizeAdminDraft({
               ...state.adminDraft,
-              bankCode: slugFromBankCode(document.getElementById("bankCodeInput")?.value || state.adminDraft.bankCode),
+              bankCode: sanitizeInput(document.getElementById("bankCodeInput")?.value || state.adminDraft.bankCode),
               bankName: sanitizeInput(document.getElementById("bankNameInput")?.value || state.adminDraft.bankName),
               uploadMode: document.getElementById("bankUploadMode")?.value || state.adminDraft.uploadMode,
               testName: sanitizeInput(document.getElementById("testNameInput")?.value || state.adminDraft.testName),
@@ -1341,7 +1348,7 @@
               return;
             }
             const fileText = await file.text();
-            const bankCode = slugFromBankCode(document.getElementById("bankCodeInput").value);
+            const bankCode = sanitizeInput(document.getElementById("bankCodeInput").value);
             const bankName = sanitizeInput(document.getElementById("bankNameInput").value);
             const mode = document.getElementById("bankUploadMode").value;
             state.adminDraft = normalizeAdminDraft({
@@ -1380,7 +1387,7 @@
             };
             state.adminDraft = normalizeAdminDraft({
               ...state.adminDraft,
-              bankCode: slugFromBankCode(document.getElementById("bankCodeInput").value),
+              bankCode: sanitizeInput(document.getElementById("bankCodeInput").value),
               bankName: sanitizeInput(document.getElementById("bankNameInput").value),
               uploadMode: document.getElementById("bankUploadMode").value,
               testName: payload.testName,
