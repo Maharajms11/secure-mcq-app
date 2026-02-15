@@ -30,10 +30,6 @@ app.get("/", async (request, reply) => {
   return html;
 });
 
-app.head("/", async (request, reply) => {
-  reply.code(200).send();
-});
-
 app.get("/index.html", async (request, reply) => {
   const html = await fs.readFile(indexPath, "utf8");
   reply.type("text/html; charset=utf-8");
