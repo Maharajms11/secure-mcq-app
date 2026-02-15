@@ -258,6 +258,13 @@
         return String(v || "").replace(/[<>`]/g, "").trim();
       }
 
+      function humanizeError(err) {
+        if (err?.payload?.error) return String(err.payload.error);
+        if (err?.payload?.message) return String(err.payload.message);
+        if (err?.message) return String(err.message);
+        return "unknown_error";
+      }
+
       function localDateTimeInputToIso(value) {
         const raw = String(value || "").trim();
         if (!raw) return "";
@@ -920,6 +927,7 @@
               <h1 class="text-2xl font-bold">Admin Panel</h1>
               <p class="text-sm text-gray-600">Test banks, test configuration, results, analytics</p>
               <button id="adminLogout" class="mt-2 px-3 py-2 rounded bg-gray-800 text-white">Logout</button>
+              <button id="resetUploadedBtn" class="mt-2 ml-2 px-3 py-2 rounded bg-red-700 text-white">Reset Uploaded Data</button>
             </div>
 
             <div class="grid lg:grid-cols-2 gap-4">
@@ -977,7 +985,7 @@
 
             <div class="bg-white rounded-xl shadow p-4 space-y-2">
               <h2 class="text-xl font-semibold">Saved Test Configurations</h2>
-              ${(tests || []).map((t) => `<div class="border rounded p-3 mb-2"><div class="font-semibold">${escapeHtml(t.code)} - ${escapeHtml(t.test_name || t.title)}</div><div class="text-sm text-gray-700">Questions: ${t.total_questions || t.draw_count}, Duration: ${t.duration_minutes}m, Window: ${new Date(t.window_start).toLocaleString()} → ${new Date(t.window_end).toLocaleString()}, Status: ${escapeHtml(t.status)}, Released: ${t.results_released ? "yes" : "no"}</div><div class="mt-2 flex gap-2"><button data-activate-test="${escapeHtml(t.code)}" class="px-2 py-1 rounded bg-emerald-700 text-white text-xs">Set Active</button><button data-close-test="${escapeHtml(t.code)}" class="px-2 py-1 rounded bg-slate-700 text-white text-xs">Set Closed</button><button data-release-test="${escapeHtml(t.code)}" class="px-2 py-1 rounded bg-indigo-700 text-white text-xs">${t.results_released ? "Hide Results" : "Release Results"}</button></div></div>`).join("") || "<p>No test configs yet.</p>"}
+              ${(tests || []).map((t) => `<div class="border rounded p-3 mb-2"><div class="font-semibold">${escapeHtml(t.code)} - ${escapeHtml(t.test_name || t.title)}</div><div class="text-sm text-gray-700">Questions: ${t.total_questions || t.draw_count}, Duration: ${t.duration_minutes}m, Window: ${new Date(t.window_start).toLocaleString()} → ${new Date(t.window_end).toLocaleString()}, Status: ${escapeHtml(t.status)}, Released: ${t.results_released ? "yes" : "no"}</div><div class="mt-2 flex gap-2"><button data-activate-test="${escapeHtml(t.code)}" class="px-2 py-1 rounded bg-emerald-700 text-white text-xs">Set Active</button><button data-close-test="${escapeHtml(t.code)}" class="px-2 py-1 rounded bg-slate-700 text-white text-xs">Set Closed</button><button data-release-test="${escapeHtml(t.code)}" class="px-2 py-1 rounded bg-indigo-700 text-white text-xs">${t.results_released ? "Hide Results" : "Release Results"}</button><button data-delete-test="${escapeHtml(t.code)}" class="px-2 py-1 rounded bg-red-700 text-white text-xs">Delete Test</button></div></div>`).join("") || "<p>No test configs yet.</p>"}
             </div>
 
             <div class="bg-white rounded-xl shadow p-4 space-y-3">
@@ -1042,6 +1050,21 @@
             state.adminToken = "";
             render();
           };
+          document.getElementById("resetUploadedBtn").onclick = async () => {
+            const value = prompt("Type RESET to clear uploaded banks/tests/results from staging:");
+            if (value !== "RESET") return;
+            try {
+              const out = await adminApiFetch("/admin/reset-uploaded-data", {
+                method: "POST",
+                body: { confirm: "RESET" }
+              });
+              state.adminData.uploadSummary = out.summary || null;
+              await refreshAdminData();
+              render();
+            } catch (err) {
+              alert(`Reset failed: ${humanizeError(err)}`);
+            }
+          };
           document.getElementById("refreshAdminBtn").onclick = async () => {
             try {
               await refreshAdminData();
@@ -1095,7 +1118,7 @@
                 await refreshAdminData();
                 render();
               } catch (err) {
-                alert(`Unable to delete bank: ${err.message}`);
+                alert(`Unable to delete bank: ${humanizeError(err)}`);
               }
             };
           });
@@ -1119,7 +1142,7 @@
               await refreshAdminData();
               render();
             } catch (err) {
-              alert(`Upload failed: ${err.message}`);
+              alert(`Upload failed: ${humanizeError(err)}`);
             }
           };
           document.getElementById("saveTestBtn").onclick = async () => {
@@ -1174,7 +1197,7 @@
               await refreshAdminData();
               render();
             } catch (err) {
-              alert(`Unable to save test: ${err.message}`);
+              alert(`Unable to save test: ${humanizeError(err)}`);
             }
           };
           document.querySelectorAll("[data-activate-test]").forEach((btn) => {
@@ -1187,7 +1210,7 @@
                 await refreshAdminData();
                 render();
               } catch (err) {
-                alert(`Unable to activate test: ${err.message}`);
+                alert(`Unable to activate test: ${humanizeError(err)}`);
               }
             };
           });
@@ -1201,7 +1224,7 @@
                 await refreshAdminData();
                 render();
               } catch (err) {
-                alert(`Unable to close test: ${err.message}`);
+                alert(`Unable to close test: ${humanizeError(err)}`);
               }
             };
           });
@@ -1217,7 +1240,20 @@
                 await refreshAdminData();
                 render();
               } catch (err) {
-                alert(`Unable to update results release: ${err.message}`);
+                alert(`Unable to update results release: ${humanizeError(err)}`);
+              }
+            };
+          });
+          document.querySelectorAll("[data-delete-test]").forEach((btn) => {
+            btn.onclick = async () => {
+              const code = btn.getAttribute("data-delete-test");
+              if (!confirm(`Delete test '${code}' and its sessions/results?`)) return;
+              try {
+                await adminApiFetch(`/admin/tests/${encodeURIComponent(code)}`, { method: "DELETE" });
+                await refreshAdminData();
+                render();
+              } catch (err) {
+                alert(`Unable to delete test: ${humanizeError(err)}`);
               }
             };
           });

@@ -463,6 +463,54 @@ export default async function adminRoutes(fastify) {
     return out.rows[0];
   });
 
+  fastify.delete("/admin/tests/:code", { preHandler: fastify.adminAuth }, async (request, reply) => {
+    const code = normalizeTestCode(request.params.code || "");
+    if (!code) return reply.code(400).send({ error: "test_code_required" });
+    if (code === normalizeTestCode(config.defaults.code)) {
+      return reply.code(400).send({ error: "default_test_cannot_be_deleted" });
+    }
+
+    const deleted = await withTx(async (client) => {
+      const test = await client.query("SELECT id FROM assessments WHERE code = $1", [code]);
+      if (!test.rows[0]) return { notFound: true };
+      const assessmentId = test.rows[0].id;
+      await client.query("DELETE FROM sessions WHERE assessment_id = $1", [assessmentId]);
+      const out = await client.query("DELETE FROM assessments WHERE id = $1", [assessmentId]);
+      return { notFound: out.rowCount === 0 };
+    });
+
+    if (deleted.notFound) return reply.code(404).send({ error: "test_not_found" });
+    return { ok: true, code };
+  });
+
+  fastify.post("/admin/reset-uploaded-data", { preHandler: fastify.adminAuth }, async (request, reply) => {
+    const confirm = sanitizeText(request.body?.confirm || "");
+    if (confirm !== "RESET") {
+      return reply.code(400).send({ error: "confirm_must_equal_RESET" });
+    }
+
+    const summary = await withTx(async (client) => {
+      const submissions = await client.query("DELETE FROM submissions");
+      const violations = await client.query("DELETE FROM violation_events");
+      const sessions = await client.query("DELETE FROM sessions");
+      const bankOptions = await client.query("DELETE FROM bank_question_options WHERE bank_code <> 'default'");
+      const bankQuestions = await client.query("DELETE FROM bank_questions WHERE bank_code <> 'default'");
+      const banks = await client.query("DELETE FROM question_banks WHERE code <> 'default'");
+      const tests = await client.query("DELETE FROM assessments WHERE code <> $1", [config.defaults.code]);
+      return {
+        submissionsDeleted: submissions.rowCount || 0,
+        violationsDeleted: violations.rowCount || 0,
+        sessionsDeleted: sessions.rowCount || 0,
+        bankOptionsDeleted: bankOptions.rowCount || 0,
+        bankQuestionsDeleted: bankQuestions.rowCount || 0,
+        banksDeleted: banks.rowCount || 0,
+        testsDeleted: tests.rowCount || 0
+      };
+    });
+
+    return { ok: true, summary };
+  });
+
   fastify.get("/admin/questions", { preHandler: fastify.adminAuth }, async (request) => {
     const bankCode = normalizeBankCode(request.query?.bankCode || "default") || "default";
     const out = await query(
