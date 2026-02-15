@@ -155,3 +155,47 @@ WHERE NOT EXISTS (
     AND bqo.question_id = qo.question_id
     AND bqo.option_key = qo.option_key
 );
+
+ALTER TABLE assessments
+  ADD COLUMN IF NOT EXISTS duration_minutes INTEGER NOT NULL DEFAULT 60,
+  ADD COLUMN IF NOT EXISTS window_start TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS window_end TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'active',
+  ADD COLUMN IF NOT EXISTS results_released BOOLEAN NOT NULL DEFAULT false,
+  ADD COLUMN IF NOT EXISTS bank_allocations JSONB NOT NULL DEFAULT '[]'::jsonb,
+  ADD COLUMN IF NOT EXISTS passcode_hash TEXT NOT NULL DEFAULT '';
+
+UPDATE assessments
+SET duration_minutes = GREATEST(1, ROUND(duration_seconds / 60.0)::int)
+WHERE duration_minutes IS NULL OR duration_minutes < 1;
+
+UPDATE assessments
+SET window_start = COALESCE(window_start, NOW())
+WHERE window_start IS NULL;
+
+UPDATE assessments
+SET window_end = COALESCE(window_end, window_start + (duration_minutes || ' minutes')::interval)
+WHERE window_end IS NULL;
+
+UPDATE assessments
+SET bank_allocations = jsonb_build_array(jsonb_build_object('bankCode', bank_code, 'count', draw_count))
+WHERE (bank_allocations = '[]'::jsonb OR bank_allocations IS NULL)
+  AND bank_code IS NOT NULL
+  AND draw_count > 0;
+
+UPDATE assessments
+SET passcode_hash = 'sha256$' || encode(digest(passcode, 'sha256'), 'hex')
+WHERE passcode_hash = '' AND passcode <> '';
+
+ALTER TABLE bank_questions
+  ADD COLUMN IF NOT EXISTS topic_tag TEXT NOT NULL DEFAULT '';
+
+ALTER TABLE sessions
+  ADD COLUMN IF NOT EXISTS disconnect_count INTEGER NOT NULL DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS last_disconnect_at TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS window_end_at TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS terminated_reason TEXT;
+
+CREATE INDEX IF NOT EXISTS idx_assessments_status_window ON assessments(status, window_start, window_end);
+CREATE INDEX IF NOT EXISTS idx_sessions_student_active ON sessions(assessment_id, student_id, status);
+CREATE INDEX IF NOT EXISTS idx_bank_questions_filter ON bank_questions(bank_code, difficulty, topic_tag);

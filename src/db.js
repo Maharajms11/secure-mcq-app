@@ -29,8 +29,8 @@ function buildPoolConfig() {
       ...base,
       host: u.hostname,
       port: Number(u.port || 5432),
-      user: u.username || "",
-      password: u.password || "",
+      user: decodeURIComponent(u.username || ""),
+      password: decodeURIComponent(u.password || ""),
       database
     };
   } catch {
@@ -43,20 +43,7 @@ function buildPoolConfig() {
 
 const resolvedConnectionString = buildConnectionString();
 const poolConfig = buildPoolConfig();
-const hasPgOverrides = ["PGUSER", "PGPASSWORD", "PGHOST", "PGPORT", "PGDATABASE"].some((k) => !!process.env[k]);
-const passwordValue = String(poolConfig.password || "");
-const passwordDiagnostics = {
-  len: passwordValue.length,
-  hasAsterisk: passwordValue.includes("*"),
-  hasBrackets: passwordValue.includes("[") || passwordValue.includes("]"),
-  hasLeadingSpace: /^\s/.test(passwordValue),
-  hasTrailingSpace: /\s$/.test(passwordValue),
-  looksLikePlaceholder: /\[YOUR-?PASSWORD\]/i.test(passwordValue)
-};
 console.log(`[db] target=${describeConnectionTarget(resolvedConnectionString)}`);
-console.log(`[db] pool_user=${poolConfig.user || "from_connection_string"}`);
-console.log(`[db] pg_env_overrides_present=${hasPgOverrides ? "yes" : "no"}`);
-console.log(`[db] password_diag=${JSON.stringify(passwordDiagnostics)}`);
 
 export const pool = new Pool({
   ...poolConfig

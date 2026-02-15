@@ -21,6 +21,36 @@ export function randomUuid() {
   return crypto.randomUUID();
 }
 
+export function hashSecret(secret) {
+  const raw = String(secret || "");
+  const salt = crypto.randomBytes(16).toString("hex");
+  const digest = crypto.scryptSync(raw, salt, 64).toString("hex");
+  return `scrypt$${salt}$${digest}`;
+}
+
+export function verifySecret(secret, storedHash) {
+  const raw = String(secret || "");
+  const encoded = String(storedHash || "");
+  if (encoded.startsWith("sha256$")) {
+    const expected = encoded.slice("sha256$".length);
+    const actual = crypto.createHash("sha256").update(raw).digest("hex");
+    const expectedBuf = Buffer.from(expected, "hex");
+    const actualBuf = Buffer.from(actual, "hex");
+    if (expectedBuf.length !== actualBuf.length) return false;
+    return crypto.timingSafeEqual(expectedBuf, actualBuf);
+  }
+  if (!encoded.startsWith("scrypt$")) return false;
+  const parts = encoded.split("$");
+  if (parts.length !== 3) return false;
+  const salt = parts[1];
+  const expectedHex = parts[2];
+  const actualHex = crypto.scryptSync(raw, salt, 64).toString("hex");
+  const expectedBuf = Buffer.from(expectedHex, "hex");
+  const actualBuf = Buffer.from(actualHex, "hex");
+  if (expectedBuf.length !== actualBuf.length) return false;
+  return crypto.timingSafeEqual(expectedBuf, actualBuf);
+}
+
 export function fisherYates(input) {
   const arr = input.slice();
   for (let i = arr.length - 1; i > 0; i -= 1) {

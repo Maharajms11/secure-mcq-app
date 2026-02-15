@@ -12,6 +12,7 @@ export const config = {
   redisUrl: process.env.REDIS_URL || "redis://localhost:6379",
   jwtSecret: process.env.JWT_SECRET || "replace-me",
   adminPassword: process.env.ADMIN_PASSWORD || "change-me",
+  adminPasswordHash: process.env.ADMIN_PASSWORD_HASH || "",
   defaults: {
     code: process.env.DEFAULT_ASSESSMENT_CODE || "ASSESS-2026",
     passcode: process.env.DEFAULT_ASSESSMENT_PASSCODE || "",
@@ -21,6 +22,7 @@ export const config = {
     showReview: String(process.env.DEFAULT_SHOW_REVIEW || "true") === "true",
     fullscreen: String(process.env.DEFAULT_FULLSCREEN || "true") === "true",
     tabWarnThreshold: Number(process.env.DEFAULT_TAB_WARN_THRESHOLD || 3),
-    tabAutosubmitThreshold: Number(process.env.DEFAULT_TAB_AUTOSUBMIT_THRESHOLD || 5)
+    tabAutosubmitThreshold: Number(process.env.DEFAULT_TAB_AUTOSUBMIT_THRESHOLD || 5),
+    windowHours: Number(process.env.DEFAULT_WINDOW_HOURS || 2)
   }
 };

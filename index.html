@@ -67,7 +67,6 @@
           return "https://secure-mcq-app.onrender.com/api";
         }
       })();
-      const ADMIN_PASSWORD = "admin123";
       const DEFAULT_CONFIG = {
         title: APP_TITLE,
         timeLimitMinutes: 60,
@@ -104,12 +103,35 @@
         attempts: loadJSON("mcq_attempts", {}),
         exitedIds: loadJSON("mcq_exited_ids", []),
         adminAuthed: false,
+        adminToken: "",
+        adminData: {
+          banks: [],
+          tests: [],
+          results: [],
+          analytics: [],
+          uploadSummary: null
+        },
+        adminDraft: {
+          bankCode: "",
+          bankName: "",
+          uploadMode: "append",
+          testName: "",
+          testCode: "",
+          totalQuestions: 10,
+          durationMinutes: 60,
+          windowStart: "",
+          windowEnd: "",
+          status: "draft",
+          resultsReleased: false,
+          passcode: "",
+          allocations: [{ bankCode: "", count: 1 }]
+        },
         session: null,
         violations: [],
         selectedOptionId: null,
         currentQuestionIndex: 0,
         answers: [],
-        timer: { remainingMs: 0, startMs: 0, endMs: 0 },
+        timer: { remainingMs: 0, windowRemainingMs: 0, startMs: 0, endMs: 0, windowEndMs: 0 },
         ui: { overlay: null, inactivityOverlay: false, submitted: false, submitting: false, advancing: false, zoomWarning: false }
       };
       state.activeAssessment = null;
@@ -149,6 +171,7 @@
       let blurCounted = false;
       let devtoolsConsecutiveHits = 0;
       let lastDevtoolsAlertAt = 0;
+      let disconnectNotified = false;
 
       window.addEventListener("hashchange", () => {
         state.route = (location.hash || "#/login").startsWith("#/admin") ? "admin" : "login";
@@ -176,9 +199,36 @@
         });
         const data = await res.json().catch(() => ({}));
         if (!res.ok) {
-          throw new Error(data.error || data.message || `api_error_${res.status}`);
+          const err = new Error(data.error || data.message || `api_error_${res.status}`);
+          err.code = data.error || data.code || `http_${res.status}`;
+          err.payload = data;
+          throw err;
         }
         return data;
+      }
+
+      async function sessionApiFetch(path, options = {}) {
+        if (!state.session?.authToken) {
+          throw new Error("missing_session_auth_token");
+        }
+        return apiFetch(path, {
+          ...options,
+          headers: {
+            ...(options.headers || {}),
+            Authorization: `Bearer ${state.session.authToken}`
+          }
+        });
+      }
+
+      async function adminApiFetch(path, options = {}) {
+        if (!state.adminToken) throw new Error("admin_not_authenticated");
+        return apiFetch(path, {
+          ...options,
+          headers: {
+            ...(options.headers || {}),
+            Authorization: `Bearer ${state.adminToken}`
+          }
+        });
       }
 
       async function loadActiveAssessment() {
@@ -288,7 +338,7 @@
           at: new Date().toISOString(),
           index: state.currentQuestionIndex + 1
         });
-        apiFetch(`/session/${state.session.token}/event`, {
+        sessionApiFetch(`/session/${state.session.token}/event`, {
           method: "POST",
           body: {
             eventType: type,
@@ -325,6 +375,10 @@
         // Fullscreen exit detection (warning + logging).
         document.addEventListener("fullscreenchange", onFullscreenChange);
 
+        // Best-effort disconnect tracking for reconnect policy.
+        window.addEventListener("pagehide", onPageHide);
+        window.addEventListener("beforeunload", onPageHide);
+
         // Best-effort devtools detection as deterrent only (can be bypassed).
         devtoolsTimerId = setInterval(checkDevtools, 1000);
 
@@ -344,6 +398,8 @@
         window.removeEventListener("focus", onFocus);
         window.removeEventListener("beforeprint", onBeforePrint);
         document.removeEventListener("fullscreenchange", onFullscreenChange);
+        window.removeEventListener("pagehide", onPageHide);
+        window.removeEventListener("beforeunload", onPageHide);
         if (devtoolsTimerId) clearInterval(devtoolsTimerId);
         ["mousemove", "keydown", "click", "touchstart"].forEach((evt) => document.removeEventListener(evt, onActivity, true));
         if (inactivityTimerId) clearTimeout(inactivityTimerId);
@@ -405,6 +461,24 @@
           state.ui.overlay = "Fullscreen was exited. This has been recorded.";
           render();
         }
+      }
+
+      function onPageHide() {
+        notifyDisconnect();
+      }
+
+      function notifyDisconnect() {
+        if (!state.session || disconnectNotified || state.ui.submitted) return;
+        disconnectNotified = true;
+        fetch(`${API_BASE}/session/${state.session.token}/disconnect`, {
+          method: "POST",
+          keepalive: true,
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${state.session.authToken || ""}`
+          },
+          body: JSON.stringify({ reason: "page_unload" })
+        }).catch(() => {});
       }
 
       function checkDevtools() {
@@ -470,12 +544,14 @@
         state.timer.startMs = now;
         state.timer.endMs = expiresAtIso ? new Date(expiresAtIso).getTime() : now + state.config.timeLimitMinutes * 60 * 1000;
         state.timer.remainingMs = state.timer.endMs - now;
+        state.timer.windowRemainingMs = state.timer.windowEndMs ? Math.max(0, state.timer.windowEndMs - now) : state.timer.remainingMs;
 
         tickTimerId = setInterval(() => {
           if (!state.session || state.ui.submitted) return;
           const nowTick = Date.now();
           const remaining = Math.max(0, state.timer.endMs - nowTick);
           state.timer.remainingMs = remaining;
+          state.timer.windowRemainingMs = state.timer.windowEndMs ? Math.max(0, state.timer.windowEndMs - nowTick) : remaining;
           state.ui.zoomWarning = Math.abs((window.devicePixelRatio || 1) - 1) > 0.15;
           if (remaining === 0) {
             logViolation("timer_expired", "auto submit");
@@ -523,14 +599,21 @@
             }
           });
 
+          if (start.error === "session_terminated_after_second_disconnect") {
+            alert("This session was terminated after a second disconnect.");
+            return;
+          }
+
           state.session = {
             token: start.token,
             seed: start.seed,
+            authToken: start.sessionAuthToken,
             identity: {
               fullName: sanitizeInput(identity.fullName),
               studentId: id
             },
-            startedAt: new Date(start.startedAt).getTime()
+            startedAt: new Date(start.startedAt).getTime(),
+            resumed: !!start.resumed
           };
 
           state.config.title = start.assessment?.title || state.config.title;
@@ -541,6 +624,7 @@
           state.config.tabSwitchWarnThreshold = Number(start.assessment?.tabWarnThreshold || state.config.tabSwitchWarnThreshold);
           state.config.tabSwitchAutoSubmitThreshold = Number(start.assessment?.tabAutosubmitThreshold || state.config.tabSwitchAutoSubmitThreshold);
           state.config.allowRetakes = Number(start.assessment?.allowRetakes || state.config.allowRetakes);
+          state.timer.windowEndMs = start.assessment?.windowEnd ? new Date(start.assessment.windowEnd).getTime() : 0;
 
           state.violations = [];
           state.answers = [];
@@ -553,17 +637,38 @@
           state.ui.submitting = false;
           state.ui.advancing = false;
           state.eventGuardUntilMs = Date.now() + 8000;
+          disconnectNotified = false;
           lastActivityAt = Date.now();
 
-          const first = await apiFetch(`/session/${start.token}/question`);
+          const first = await sessionApiFetch(`/session/${start.token}/question`);
           state.currentQuestionPayload = first;
           state.currentQuestionIndex = Number(first.questionIndex || 0);
+          state.timer.windowRemainingMs = Number(first.windowRemainingMs || 0);
+          if (start.reconnectWarning) {
+            alert(start.reconnectWarning);
+          }
 
           activateHardeners();
           startTimer(start.expiresAt);
           state.route = "assessment";
           render();
         } catch (err) {
+          if (err.code === "assessment_not_open") {
+            const mins = Math.max(1, Math.ceil(Number(err.payload?.opensInMs || 0) / 60000));
+            alert(`Assessment is not open yet. Opens in about ${mins} minute(s).`);
+            return;
+          }
+          if (err.code === "assessment_closed") {
+            alert("Assessment window has closed.");
+            return;
+          }
+          if (err.code === "session_terminated_after_second_disconnect") {
+            alert("Session terminated after second disconnect and auto-submitted.");
+            state.currentResult = err.payload?.result || null;
+            state.route = "results";
+            render();
+            return;
+          }
           alert(`Unable to start assessment: ${err.message}`);
         }
       }
@@ -582,7 +687,7 @@
           const selected = state.selectedOptionId;
           state.ui.advancing = true;
           render();
-          const response = await apiFetch(`/session/${state.session.token}/answer`, {
+          const response = await sessionApiFetch(`/session/${state.session.token}/answer`, {
             method: "POST",
             body: {
               questionId: q.id,
@@ -591,11 +696,7 @@
           });
 
           if (response.done) {
-            state.currentResult = {
-              ...response.result,
-              violations: state.violations.slice(),
-              violationCount: state.violations.length
-            };
+            applySubmissionResponse(response.submission || response);
             state.results = [state.currentResult].concat(state.results);
             saveJSON("mcq_results", state.results);
             const sid = state.session.identity.studentId;
@@ -616,6 +717,9 @@
           if (Number.isFinite(Number(response.remainingMs))) {
             state.timer.remainingMs = Math.max(0, Number(response.remainingMs));
           }
+          if (Number.isFinite(Number(response.windowRemainingMs))) {
+            state.timer.windowRemainingMs = Math.max(0, Number(response.windowRemainingMs));
+          }
           state.selectedOptionId = null;
           state.ui.advancing = false;
           rerollHatchAngle();
@@ -632,17 +736,12 @@
         state.ui.submitting = true;
         render();
         try {
-          const response = await apiFetch(`/session/${state.session.token}/submit`, {
+          const response = await sessionApiFetch(`/session/${state.session.token}/submit`, {
             method: "POST",
             body: { autoSubmitted: !!auto }
           });
-          const result = {
-            ...(response.result || {}),
-            violations: state.violations.slice(),
-            violationCount: state.violations.length
-          };
-          state.currentResult = result;
-          state.results = [result].concat(state.results);
+          applySubmissionResponse(response);
+          state.results = [state.currentResult].concat(state.results);
           saveJSON("mcq_results", state.results);
 
           const sid = state.session.identity.studentId;
@@ -662,6 +761,31 @@
           alert(`Unable to submit assessment: ${err.message}`);
           render();
         }
+      }
+
+      function applySubmissionResponse(response) {
+        if (response.resultsReleased && response.result) {
+          state.currentResult = {
+            ...response.result,
+            violations: state.violations.slice(),
+            violationCount: state.violations.length
+          };
+          return;
+        }
+        state.currentResult = {
+          token: response.token || state.session?.token,
+          submittedAt: response.submittedAt || new Date().toISOString(),
+          score: null,
+          total: state.config.drawCount,
+          percentage: null,
+          timeTakenMs: Date.now() - (state.session?.startedAt || Date.now()),
+          violationCount: state.violations.length,
+          resultsReleased: false,
+          pendingMessage: response.message || "Results are pending admin release.",
+          student: state.session?.identity || { fullName: "", studentId: "" },
+          details: [],
+          violations: state.violations.slice()
+        };
       }
 
       function clearVisualTimers() {
@@ -751,78 +875,118 @@
         return `${m}:${s}`;
       }
 
+      async function refreshAdminData() {
+        const [banks, tests, results, analytics] = await Promise.all([
+          adminApiFetch("/admin/banks"),
+          adminApiFetch("/admin/tests"),
+          adminApiFetch("/admin/results"),
+          adminApiFetch("/admin/analytics/questions")
+        ]);
+        state.adminData.banks = banks;
+        state.adminData.tests = tests;
+        state.adminData.results = results;
+        state.adminData.analytics = analytics;
+      }
+
       function adminScreen() {
-        const cats = [...new Set(state.bank.map(q => q.category))];
-        const rows = state.results.map((r, i) => `
-          <tr class="border-b">
-            <td class="p-2">${i + 1}</td>
-            <td class="p-2">${escapeHtml(r.student.fullName)}</td>
-            <td class="p-2">${escapeHtml(r.student.studentId)}</td>
-            <td class="p-2">${r.score}/${r.total} (${r.percentage}%)</td>
-            <td class="p-2">${Math.round(r.timeTakenMs / 1000)}s</td>
-            <td class="p-2">${r.violationCount}</td>
-            <td class="p-2">${new Date(r.submittedAt).toLocaleString()}</td>
-          </tr>
+        const banks = state.adminData.banks || [];
+        const tests = state.adminData.tests || [];
+        const results = state.adminData.results || [];
+        const analytics = state.adminData.analytics || [];
+        const allocationRows = (state.adminDraft.allocations || []).map((a, i) => `
+          <div class="grid grid-cols-12 gap-2 items-center mb-2" data-alloc-row="${i}">
+            <select class="col-span-7 border rounded p-2 alloc-bank">
+              <option value="">Select bank</option>
+              ${banks.map((b) => `<option value="${escapeHtml(b.code)}" ${a.bankCode === b.code ? "selected" : ""}>${escapeHtml(b.code)} (${b.question_count})</option>`).join("")}
+            </select>
+            <input type="number" min="1" class="col-span-3 border rounded p-2 alloc-count" value="${Number(a.count || 1)}">
+            <button type="button" class="col-span-2 px-2 py-2 rounded bg-gray-200 remove-alloc">Remove</button>
+          </div>
         `).join("");
+        const allocTotal = (state.adminDraft.allocations || []).reduce((s, a) => s + Number(a.count || 0), 0);
 
         return `
-          <div class="max-w-6xl mx-auto p-4 md:p-8 space-y-6">
+          <div class="max-w-7xl mx-auto p-4 md:p-8 space-y-6">
             <div class="bg-white rounded-xl shadow p-4">
               <h1 class="text-2xl font-bold">Admin Panel</h1>
-              <p class="text-sm text-gray-600">Route: /admin (hash: #/admin)</p>
+              <p class="text-sm text-gray-600">Test banks, test configuration, results, analytics</p>
               <button id="adminLogout" class="mt-2 px-3 py-2 rounded bg-gray-800 text-white">Logout</button>
             </div>
 
-            <div class="grid md:grid-cols-2 gap-4">
-              <div class="bg-white rounded-xl shadow p-4 space-y-2">
-                <h2 class="text-xl font-semibold">Assessment Configuration</h2>
-                <label class="block text-sm">Title <input id="cfgTitle" class="w-full border rounded p-2" value="${escapeHtml(state.config.title)}"></label>
-                <label class="block text-sm">Time Limit (minutes) <input id="cfgTime" type="number" class="w-full border rounded p-2" value="${state.config.timeLimitMinutes}"></label>
-                <label class="block text-sm">Questions to Draw <input id="cfgDraw" type="number" class="w-full border rounded p-2" value="${state.config.drawCount}"></label>
-                <label class="block text-sm">Assessment Passcode <input id="cfgPass" class="w-full border rounded p-2" value="${escapeHtml(state.config.passcode)}"></label>
-                <label class="block text-sm">Allow Retakes (count) <input id="cfgRetakes" type="number" min="0" class="w-full border rounded p-2" value="${state.config.allowRetakes}"></label>
-                <label class="flex items-center gap-2"><input id="cfgReview" type="checkbox" ${state.config.showPostReview ? "checked" : ""}> Show post-result review</label>
-                <label class="flex items-center gap-2"><input id="cfgFs" type="checkbox" ${state.config.fullscreenEnforcement ? "checked" : ""}> Fullscreen enforcement</label>
-                <label class="block text-sm">Tab warn threshold <input id="cfgWarn" type="number" class="w-full border rounded p-2" value="${state.config.tabSwitchWarnThreshold}"></label>
-                <label class="block text-sm">Tab autosubmit threshold <input id="cfgAuto" type="number" class="w-full border rounded p-2" value="${state.config.tabSwitchAutoSubmitThreshold}"></label>
-                <label class="block text-sm">Questions per category (JSON object)
-                  <textarea id="cfgQpc" class="w-full border rounded p-2 h-20">${escapeHtml(JSON.stringify(state.config.questionsPerCategory || {}))}</textarea>
+            <div class="grid lg:grid-cols-2 gap-4">
+              <div class="bg-white rounded-xl shadow p-4 space-y-3">
+                <h2 class="text-xl font-semibold">Upload Test Bank (Aiken .txt)</h2>
+                <label class="block text-sm">Bank code <input id="bankCodeInput" class="w-full border rounded p-2" value="${escapeHtml(state.adminDraft.bankCode || "")}" placeholder="anatomy_bank_a"></label>
+                <label class="block text-sm">Bank name <input id="bankNameInput" class="w-full border rounded p-2" value="${escapeHtml(state.adminDraft.bankName || "")}" placeholder="Anatomy Bank A"></label>
+                <label class="block text-sm">Mode
+                  <select id="bankUploadMode" class="w-full border rounded p-2">
+                    <option value="append" ${state.adminDraft.uploadMode === "append" ? "selected" : ""}>Append</option>
+                    <option value="replace" ${state.adminDraft.uploadMode === "replace" ? "selected" : ""}>Replace</option>
+                  </select>
                 </label>
-                <button id="saveConfig" class="px-3 py-2 rounded bg-blue-700 text-white">Save Config</button>
+                <label class="block text-sm">Aiken file <input id="bankFileInput" type="file" accept=".txt,.aiken,text/plain" class="w-full border rounded p-2"></label>
+                <button id="uploadBankBtn" class="px-3 py-2 rounded bg-indigo-700 text-white">Upload Bank</button>
+                ${state.adminData.uploadSummary ? `<pre class="text-xs bg-gray-50 border rounded p-2 overflow-x-auto">${escapeHtml(JSON.stringify(state.adminData.uploadSummary, null, 2))}</pre>` : ""}
+                <div class="text-sm text-gray-700">
+                  <p class="font-semibold mb-1">Bank list</p>
+                  ${(banks || []).map((b) => `<div class="flex items-center justify-between border rounded p-2 mb-2"><span>${escapeHtml(b.code)} - ${escapeHtml(b.name)} (${b.question_count})</span><button data-del-bank="${escapeHtml(b.code)}" class="px-2 py-1 rounded bg-red-600 text-white text-xs">Delete</button></div>`).join("") || "<p>No banks yet.</p>"}
+                </div>
               </div>
 
-              <div class="bg-white rounded-xl shadow p-4 space-y-2">
-                <h2 class="text-xl font-semibold">Question Bank Management</h2>
-                <p class="text-sm text-gray-600">Categories: ${cats.join(", ")}</p>
-                <label class="block text-sm">Import JSON
-                  <textarea id="importJson" class="w-full border rounded p-2 h-24" placeholder='[{"id":"q011",...}]'></textarea>
-                </label>
-                <button id="importBank" class="px-3 py-2 rounded bg-indigo-700 text-white">Import/Replace Bank</button>
-                <button id="exportBank" class="px-3 py-2 rounded bg-gray-700 text-white">Export Bank JSON</button>
-                <button id="addSampleQuestion" class="px-3 py-2 rounded bg-emerald-700 text-white">Add Sample Question</button>
-                <div id="bankCount" class="text-sm">Questions: ${state.bank.length}</div>
+              <div class="bg-white rounded-xl shadow p-4 space-y-3">
+                <h2 class="text-xl font-semibold">Create / Save Test Configuration</h2>
+                <label class="block text-sm">Test name <input id="testNameInput" class="w-full border rounded p-2" value="${escapeHtml(state.adminDraft.testName || "")}" placeholder="Midterm March 2026"></label>
+                <label class="block text-sm">Test code <input id="testCodeInput" class="w-full border rounded p-2" value="${escapeHtml(state.adminDraft.testCode || "")}" placeholder="MIDTERM-2026-03"></label>
+                <div class="grid grid-cols-2 gap-2">
+                  <label class="block text-sm">Total questions <input id="totalQuestionsInput" type="number" min="1" class="w-full border rounded p-2" value="${Number(state.adminDraft.totalQuestions || 10)}"></label>
+                  <label class="block text-sm">Duration (minutes) <input id="durationInput" type="number" min="1" class="w-full border rounded p-2" value="${Number(state.adminDraft.durationMinutes || 60)}"></label>
+                </div>
+                <div class="grid grid-cols-2 gap-2">
+                  <label class="block text-sm">Window start <input id="windowStartInput" type="datetime-local" class="w-full border rounded p-2" value="${escapeHtml(state.adminDraft.windowStart || "")}"></label>
+                  <label class="block text-sm">Window end <input id="windowEndInput" type="datetime-local" class="w-full border rounded p-2" value="${escapeHtml(state.adminDraft.windowEnd || "")}"></label>
+                </div>
+                <div class="grid grid-cols-2 gap-2">
+                  <label class="block text-sm">Status
+                    <select id="testStatusInput" class="w-full border rounded p-2">
+                      <option value="draft" ${state.adminDraft.status === "draft" ? "selected" : ""}>draft</option>
+                      <option value="active" ${state.adminDraft.status === "active" ? "selected" : ""}>active</option>
+                      <option value="closed" ${state.adminDraft.status === "closed" ? "selected" : ""}>closed</option>
+                    </select>
+                  </label>
+                  <label class="block text-sm">Passcode <input id="testPasscodeInput" class="w-full border rounded p-2" value="${escapeHtml(state.adminDraft.passcode || "")}"></label>
+                </div>
+                <label class="flex items-center gap-2"><input id="resultsReleasedInput" type="checkbox" ${state.adminDraft.resultsReleased ? "checked" : ""}> Results released</label>
+                <div>
+                  <p class="font-semibold mb-2">Bank allocations</p>
+                  <div id="allocRows">${allocationRows}</div>
+                  <button id="addAllocBtn" class="px-3 py-2 rounded bg-gray-200">Add Allocation Row</button>
+                  <p class="text-xs mt-2">Allocation total: <strong id="allocTotal">${allocTotal}</strong></p>
+                </div>
+                <button id="saveTestBtn" class="px-3 py-2 rounded bg-blue-700 text-white">Save Test Config</button>
               </div>
             </div>
 
+            <div class="bg-white rounded-xl shadow p-4 space-y-2">
+              <h2 class="text-xl font-semibold">Saved Test Configurations</h2>
+              ${(tests || []).map((t) => `<div class="border rounded p-3 mb-2"><div class="font-semibold">${escapeHtml(t.code)} - ${escapeHtml(t.test_name || t.title)}</div><div class="text-sm text-gray-700">Questions: ${t.total_questions || t.draw_count}, Duration: ${t.duration_minutes}m, Window: ${new Date(t.window_start).toLocaleString()} → ${new Date(t.window_end).toLocaleString()}, Status: ${escapeHtml(t.status)}, Released: ${t.results_released ? "yes" : "no"}</div><div class="mt-2 flex gap-2"><button data-activate-test="${escapeHtml(t.code)}" class="px-2 py-1 rounded bg-emerald-700 text-white text-xs">Set Active</button><button data-close-test="${escapeHtml(t.code)}" class="px-2 py-1 rounded bg-slate-700 text-white text-xs">Set Closed</button><button data-release-test="${escapeHtml(t.code)}" class="px-2 py-1 rounded bg-indigo-700 text-white text-xs">${t.results_released ? "Hide Results" : "Release Results"}</button></div></div>`).join("") || "<p>No test configs yet.</p>"}
+            </div>
+
             <div class="bg-white rounded-xl shadow p-4 space-y-3">
-              <h2 class="text-xl font-semibold">Results Dashboard</h2>
+              <h2 class="text-xl font-semibold">Results + Analytics</h2>
               <div class="flex gap-2 flex-wrap">
-                <input id="filterMin" type="number" placeholder="Min score %" class="border rounded p-2" />
-                <input id="filterMax" type="number" placeholder="Max score %" class="border rounded p-2" />
-                <select id="filterViolation" class="border rounded p-2">
-                  <option value="all">All</option>
-                  <option value="with">With violations</option>
-                  <option value="none">No violations</option>
-                </select>
-                <button id="applyFilter" class="px-3 py-2 rounded bg-slate-700 text-white">Apply Filter</button>
-                <button id="exportResults" class="px-3 py-2 rounded bg-teal-700 text-white">Export CSV</button>
+                <button id="refreshAdminBtn" class="px-3 py-2 rounded bg-slate-700 text-white">Refresh</button>
+                <button id="exportResultsBtn" class="px-3 py-2 rounded bg-teal-700 text-white">Export CSV</button>
               </div>
               <div class="overflow-x-auto">
                 <table class="w-full text-sm">
-                  <thead class="bg-gray-100">
-                    <tr><th class="p-2 text-left">#</th><th class="p-2 text-left">Name</th><th class="p-2 text-left">ID</th><th class="p-2 text-left">Score</th><th class="p-2 text-left">Time</th><th class="p-2 text-left">Violations</th><th class="p-2 text-left">Submitted</th></tr>
-                  </thead>
-                  <tbody id="resultRows">${rows || "<tr><td colspan='7' class='p-3 text-gray-500'>No results yet.</td></tr>"}</tbody>
+                  <thead class="bg-gray-100"><tr><th class="p-2 text-left">Student</th><th class="p-2 text-left">ID</th><th class="p-2 text-left">Score</th><th class="p-2 text-left">Violations</th><th class="p-2 text-left">Submitted</th></tr></thead>
+                  <tbody>${results.map((r) => `<tr class="border-b"><td class="p-2">${escapeHtml(r.student_name)}</td><td class="p-2">${escapeHtml(r.student_id)}</td><td class="p-2">${r.score}/${r.total} (${r.percentage}%)</td><td class="p-2">${r.violation_count}</td><td class="p-2">${new Date(r.submitted_at).toLocaleString()}</td></tr>`).join("") || "<tr><td class='p-2 text-gray-500' colspan='5'>No results.</td></tr>"}</tbody>
+                </table>
+              </div>
+              <div class="overflow-x-auto">
+                <table class="w-full text-sm">
+                  <thead class="bg-gray-100"><tr><th class="p-2 text-left">Bank</th><th class="p-2 text-left">Question</th><th class="p-2 text-left">Difficulty</th><th class="p-2 text-left">Topic</th><th class="p-2 text-left">Served</th><th class="p-2 text-left">Correct</th><th class="p-2 text-left">Correct %</th><th class="p-2 text-left">Choices</th></tr></thead>
+                  <tbody>${analytics.map((a) => `<tr class="border-b"><td class="p-2">${escapeHtml(a.bank_name)}</td><td class="p-2">${escapeHtml(a.question_id)}</td><td class="p-2">${escapeHtml(a.difficulty)}</td><td class="p-2">${escapeHtml(a.topic_tag)}</td><td class="p-2">${a.served_count}</td><td class="p-2">${a.correct_count}</td><td class="p-2">${a.correct_percent}%</td><td class="p-2">${escapeHtml(JSON.stringify(a.choice_distribution || {}))}</td></tr>`).join("") || "<tr><td class='p-2 text-gray-500' colspan='8'>No analytics.</td></tr>"}</tbody>
                 </table>
               </div>
             </div>
@@ -843,96 +1007,215 @@
                 <a href="#/login" class="text-blue-700 underline">Back to assessment</a>
               </div>
             `;
-            document.getElementById("adminLogin").onclick = () => {
-              if (document.getElementById("adminPass").value === ADMIN_PASSWORD) {
+            document.getElementById("adminLogin").onclick = async () => {
+              try {
+                const response = await apiFetch("/admin/login", {
+                  method: "POST",
+                  body: { password: document.getElementById("adminPass").value || "" }
+                });
+                state.adminToken = response.token;
                 state.adminAuthed = true;
+                await refreshAdminData();
                 render();
-              } else {
-                alert("Invalid admin password.");
+              } catch (err) {
+                alert(`Invalid admin password or login blocked: ${err.message}`);
               }
             };
             return;
           }
 
           app.innerHTML = adminScreen();
-          document.getElementById("adminLogout").onclick = () => { state.adminAuthed = false; render(); };
-          document.getElementById("saveConfig").onclick = () => {
-            try {
-              state.config = {
-                title: sanitizeInput(document.getElementById("cfgTitle").value) || APP_TITLE,
-                timeLimitMinutes: Math.max(1, Number(document.getElementById("cfgTime").value) || 60),
-                drawCount: Math.max(1, Number(document.getElementById("cfgDraw").value) || 10),
-                passcode: sanitizeInput(document.getElementById("cfgPass").value),
-                allowRetakes: Math.max(0, Number(document.getElementById("cfgRetakes").value) || 0),
-                showPostReview: document.getElementById("cfgReview").checked,
-                fullscreenEnforcement: document.getElementById("cfgFs").checked,
-                tabSwitchWarnThreshold: Math.max(1, Number(document.getElementById("cfgWarn").value) || 3),
-                tabSwitchAutoSubmitThreshold: Math.max(2, Number(document.getElementById("cfgAuto").value) || 5),
-                questionsPerCategory: JSON.parse(document.getElementById("cfgQpc").value || "{}")
-              };
-              saveJSON("mcq_config", state.config);
-              alert("Config saved.");
-            } catch {
-              alert("Invalid configuration values.");
-            }
-          };
-          document.getElementById("importBank").onclick = () => {
-            try {
-              const parsed = JSON.parse(document.getElementById("importJson").value);
-              if (!Array.isArray(parsed) || !parsed.length) throw new Error();
-              state.bank = parsed;
-              saveJSON("mcq_bank", state.bank);
-              render();
-            } catch {
-              alert("Invalid bank JSON.");
-            }
-          };
-          document.getElementById("exportBank").onclick = () => download("question-bank.json", JSON.stringify(state.bank, null, 2), "application/json");
-          document.getElementById("addSampleQuestion").onclick = () => {
-            state.bank.push({
-              id: `q${String(state.bank.length + 1).padStart(3, "0")}`,
-              category: "General",
-              difficulty: "easy",
-              stem: "Sample question",
-              distractors: [{id:"a",text:"Option 1",correct:true},{id:"b",text:"Option 2",correct:false}],
-              explanation: "Sample explanation",
-              image: null
-            });
-            saveJSON("mcq_bank", state.bank);
+          if (!(state.adminData.banks || []).length && state.adminToken) {
+            refreshAdminData().then(() => render()).catch(() => {});
+          }
+          document.getElementById("adminLogout").onclick = () => {
+            state.adminAuthed = false;
+            state.adminToken = "";
             render();
           };
-          document.getElementById("applyFilter").onclick = () => {
-            const min = Number(document.getElementById("filterMin").value || 0);
-            const max = Number(document.getElementById("filterMax").value || 100);
-            const vf = document.getElementById("filterViolation").value;
-            const filtered = state.results.filter(r => r.percentage >= min && r.percentage <= max)
-              .filter(r => vf === "all" ? true : vf === "with" ? r.violationCount > 0 : r.violationCount === 0);
-            document.getElementById("resultRows").innerHTML = filtered.map((r, i) => `
-              <tr class="border-b">
-                <td class="p-2">${i + 1}</td>
-                <td class="p-2">${escapeHtml(r.student.fullName)}</td>
-                <td class="p-2">${escapeHtml(r.student.studentId)}</td>
-                <td class="p-2">${r.score}/${r.total} (${r.percentage}%)</td>
-                <td class="p-2">${Math.round(r.timeTakenMs / 1000)}s</td>
-                <td class="p-2">${r.violationCount}</td>
-                <td class="p-2">${new Date(r.submittedAt).toLocaleString()}</td>
-              </tr>
-            `).join("") || "<tr><td colspan='7' class='p-3 text-gray-500'>No matches.</td></tr>";
+          document.getElementById("refreshAdminBtn").onclick = async () => {
+            try {
+              await refreshAdminData();
+              render();
+            } catch (err) {
+              alert(`Unable to refresh admin data: ${err.message}`);
+            }
           };
-          document.getElementById("exportResults").onclick = () => {
-            const lines = ["token,name,id,score,total,percentage,timeTakenMs,violations,submittedAt"];
-            state.results.forEach(r => lines.push([
-              r.token,
-              `"${String(r.student.fullName).replace(/"/g, '""')}"`,
-              `"${String(r.student.studentId).replace(/"/g, '""')}"`,
-              r.score,
-              r.total,
-              r.percentage,
-              r.timeTakenMs,
-              r.violationCount,
-              r.submittedAt
-            ].join(",")));
-            download("results.csv", lines.join("\n"), "text/csv");
+          const updateAllocUi = () => {
+            const totalQuestions = Number(document.getElementById("totalQuestionsInput")?.value || 0);
+            const allocRows = [...document.querySelectorAll("[data-alloc-row]")];
+            const allocations = allocRows.map((row) => ({
+              bankCode: sanitizeInput(row.querySelector(".alloc-bank")?.value || ""),
+              count: Number(row.querySelector(".alloc-count")?.value || 0)
+            })).filter((r) => r.bankCode && Number.isInteger(r.count) && r.count > 0);
+            state.adminDraft.allocations = allocations.length ? allocations : [{ bankCode: "", count: 1 }];
+            const sum = allocations.reduce((s, a) => s + a.count, 0);
+            const totalEl = document.getElementById("allocTotal");
+            if (totalEl) totalEl.textContent = String(sum);
+            const saveBtn = document.getElementById("saveTestBtn");
+            if (saveBtn) {
+              const ok = sum === totalQuestions && totalQuestions > 0;
+              saveBtn.disabled = !ok;
+              saveBtn.className = `px-3 py-2 rounded text-white ${ok ? "bg-blue-700" : "bg-gray-400 cursor-not-allowed"}`;
+            }
+          };
+          document.getElementById("addAllocBtn").onclick = () => {
+            state.adminDraft.allocations = (state.adminDraft.allocations || []).concat([{ bankCode: "", count: 1 }]);
+            render();
+          };
+          document.querySelectorAll(".alloc-count").forEach((el) => { el.oninput = updateAllocUi; });
+          document.querySelectorAll(".alloc-bank").forEach((el) => { el.onchange = updateAllocUi; });
+          const totalInput = document.getElementById("totalQuestionsInput");
+          if (totalInput) totalInput.oninput = updateAllocUi;
+          updateAllocUi();
+          document.querySelectorAll(".remove-alloc").forEach((btn) => {
+            btn.onclick = () => {
+              const row = btn.closest("[data-alloc-row]");
+              const index = Number(row?.getAttribute("data-alloc-row"));
+              state.adminDraft.allocations = (state.adminDraft.allocations || []).filter((_, i) => i !== index);
+              if (!state.adminDraft.allocations.length) state.adminDraft.allocations = [{ bankCode: "", count: 1 }];
+              render();
+            };
+          });
+          document.querySelectorAll("[data-del-bank]").forEach((btn) => {
+            btn.onclick = async () => {
+              const code = btn.getAttribute("data-del-bank");
+              if (!confirm(`Delete bank '${code}'?`)) return;
+              try {
+                await adminApiFetch(`/admin/banks/${encodeURIComponent(code)}`, { method: "DELETE" });
+                await refreshAdminData();
+                render();
+              } catch (err) {
+                alert(`Unable to delete bank: ${err.message}`);
+              }
+            };
+          });
+          document.getElementById("uploadBankBtn").onclick = async () => {
+            const fileEl = document.getElementById("bankFileInput");
+            const file = fileEl.files && fileEl.files[0];
+            if (!file) {
+              alert("Please choose an Aiken text file.");
+              return;
+            }
+            const fileText = await file.text();
+            const bankCode = sanitizeInput(document.getElementById("bankCodeInput").value);
+            const bankName = sanitizeInput(document.getElementById("bankNameInput").value);
+            const mode = document.getElementById("bankUploadMode").value;
+            try {
+              const response = await adminApiFetch("/admin/banks/upload", {
+                method: "POST",
+                body: { bankCode, bankName, mode, fileText }
+              });
+              state.adminData.uploadSummary = response.summary || null;
+              await refreshAdminData();
+              render();
+            } catch (err) {
+              alert(`Upload failed: ${err.message}`);
+            }
+          };
+          document.getElementById("saveTestBtn").onclick = async () => {
+            const allocRows = [...document.querySelectorAll("[data-alloc-row]")];
+            const allocations = allocRows.map((row) => ({
+              bankCode: sanitizeInput(row.querySelector(".alloc-bank")?.value || ""),
+              count: Number(row.querySelector(".alloc-count")?.value || 0)
+            })).filter((r) => r.bankCode && Number.isInteger(r.count) && r.count > 0);
+
+            const payload = {
+              testName: sanitizeInput(document.getElementById("testNameInput").value),
+              code: sanitizeInput(document.getElementById("testCodeInput").value),
+              totalQuestions: Number(document.getElementById("totalQuestionsInput").value || 0),
+              durationMinutes: Number(document.getElementById("durationInput").value || 0),
+              windowStart: document.getElementById("windowStartInput").value,
+              windowEnd: document.getElementById("windowEndInput").value,
+              status: document.getElementById("testStatusInput").value,
+              resultsReleased: document.getElementById("resultsReleasedInput").checked,
+              passcode: sanitizeInput(document.getElementById("testPasscodeInput").value),
+              bankAllocations: allocations
+            };
+            state.adminDraft = {
+              ...state.adminDraft,
+              bankCode: sanitizeInput(document.getElementById("bankCodeInput").value),
+              bankName: sanitizeInput(document.getElementById("bankNameInput").value),
+              uploadMode: document.getElementById("bankUploadMode").value,
+              testName: payload.testName,
+              testCode: payload.code,
+              totalQuestions: payload.totalQuestions,
+              durationMinutes: payload.durationMinutes,
+              windowStart: payload.windowStart,
+              windowEnd: payload.windowEnd,
+              status: payload.status,
+              resultsReleased: payload.resultsReleased,
+              passcode: payload.passcode,
+              allocations
+            };
+
+            if (allocations.reduce((s, a) => s + a.count, 0) !== payload.totalQuestions) {
+              alert("Allocation total must equal total questions.");
+              return;
+            }
+            try {
+              await adminApiFetch("/admin/tests", { method: "POST", body: payload });
+              await refreshAdminData();
+              render();
+            } catch (err) {
+              alert(`Unable to save test: ${err.message}`);
+            }
+          };
+          document.querySelectorAll("[data-activate-test]").forEach((btn) => {
+            btn.onclick = async () => {
+              try {
+                await adminApiFetch(`/admin/tests/${encodeURIComponent(btn.getAttribute("data-activate-test"))}/status`, {
+                  method: "POST",
+                  body: { status: "active" }
+                });
+                await refreshAdminData();
+                render();
+              } catch (err) {
+                alert(`Unable to activate test: ${err.message}`);
+              }
+            };
+          });
+          document.querySelectorAll("[data-close-test]").forEach((btn) => {
+            btn.onclick = async () => {
+              try {
+                await adminApiFetch(`/admin/tests/${encodeURIComponent(btn.getAttribute("data-close-test"))}/status`, {
+                  method: "POST",
+                  body: { status: "closed" }
+                });
+                await refreshAdminData();
+                render();
+              } catch (err) {
+                alert(`Unable to close test: ${err.message}`);
+              }
+            };
+          });
+          document.querySelectorAll("[data-release-test]").forEach((btn) => {
+            btn.onclick = async () => {
+              const code = btn.getAttribute("data-release-test");
+              const test = (state.adminData.tests || []).find((t) => t.code === code);
+              try {
+                await adminApiFetch(`/admin/tests/${encodeURIComponent(code)}/release`, {
+                  method: "POST",
+                  body: { resultsReleased: !(test?.results_released) }
+                });
+                await refreshAdminData();
+                render();
+              } catch (err) {
+                alert(`Unable to update results release: ${err.message}`);
+              }
+            };
+          });
+          document.getElementById("exportResultsBtn").onclick = async () => {
+            try {
+              const res = await fetch(`${API_BASE}/admin/results.csv`, {
+                headers: { Authorization: `Bearer ${state.adminToken}` }
+              });
+              const content = await res.text();
+              if (!res.ok) throw new Error(content || "export_failed");
+              download("results.csv", content, "text/csv");
+            } catch (err) {
+              alert(`Export failed: ${err.message}`);
+            }
           };
           return;
         }
@@ -1008,6 +1291,7 @@
               <div class="max-w-5xl mx-auto px-3 py-2 flex items-center justify-between gap-2 text-sm">
                 <div class="font-semibold truncate">${escapeHtml(state.session.identity.fullName)} | ${escapeHtml(state.config.title)}</div>
                 <div class="px-2 py-1 border rounded ${timerBadgeClass(state.timer.remainingMs)}">${fmt(state.timer.remainingMs)}</div>
+                <div class="px-2 py-1 border rounded text-slate-700 bg-slate-100 border-slate-300">Window ${fmt(state.timer.windowRemainingMs)}</div>
                 <div>Question ${idx} of ${n}</div>
                 ${state.config.fullscreenEnforcement && !document.fullscreenElement ? `<button id="enterFsBtn" class="px-2 py-1 rounded bg-slate-700 text-white text-xs">Enter Fullscreen</button>` : ""}
               </div>
@@ -1068,17 +1352,18 @@
 
         if (state.route === "results" && state.results.length) {
           const r = state.results[0];
+          const hasReleasedResults = Number.isInteger(r.score) && Array.isArray(r.details) && r.details.length >= 0 && r.resultsReleased !== false;
           app.innerHTML = `
             <div class="max-w-4xl mx-auto p-4 md:p-8 space-y-4">
               <div class="bg-white rounded-xl shadow p-6">
                 <h1 class="text-2xl font-bold">Assessment Results</h1>
-                <p class="mt-2">Score: <strong>${r.score} / ${r.total}</strong> (${r.percentage}%)</p>
+                ${hasReleasedResults ? `<p class="mt-2">Score: <strong>${r.score} / ${r.total}</strong> (${r.percentage}%)</p>` : `<p class="mt-2 text-amber-700 font-semibold">${escapeHtml(r.pendingMessage || "Results are pending admin release.")}</p>`}
                 <p>Time taken: <strong>${Math.round(r.timeTakenMs / 1000)} seconds</strong></p>
                 <p>Violation flags: <strong>${r.violationCount}</strong></p>
                 <p class="text-sm text-gray-600 mt-2">Assessment Reference Number: <code>${escapeHtml(r.token)}</code></p>
                 <div class="mt-3">
-                  <button id="downloadResultsJson" class="px-4 py-2 rounded bg-gray-900 text-white">Download Results (JSON)</button>
-                  <button id="downloadReviewCsv" class="ml-2 px-4 py-2 rounded bg-slate-700 text-white">Download Review (CSV)</button>
+                  ${hasReleasedResults ? `<button id="downloadResultsJson" class="px-4 py-2 rounded bg-gray-900 text-white">Download Results (JSON)</button>
+                  <button id="downloadReviewCsv" class="ml-2 px-4 py-2 rounded bg-slate-700 text-white">Download Review (CSV)</button>` : `<button id="checkReleasedBtn" class="px-4 py-2 rounded bg-blue-700 text-white">Check Released Results</button>`}
                   <button id="exitAssessment" class="ml-2 px-4 py-2 rounded bg-red-700 text-white">Exit</button>
                 </div>
               </div>
@@ -1088,17 +1373,42 @@
                 <pre class="text-xs bg-gray-50 border rounded p-3 overflow-x-auto">${escapeHtml(JSON.stringify(r.violations, null, 2))}</pre>
               </div>
 
-              ${state.config.showPostReview ? `<div class='bg-white rounded-xl shadow p-6'><h2 class='text-xl font-semibold mb-2'>Question Review</h2>${r.details.map((d, i) => `<div class='border rounded p-3 mb-2'><div class='font-semibold'>Q${i+1}: ${escapeHtml(d.stem)}</div><div class='text-sm mt-1'>Your answer: ${escapeHtml(d.selected)}</div><div class='text-sm'>Correct answer: ${escapeHtml(d.correct)}</div><div class='text-xs text-gray-600 mt-1'>${escapeHtml(d.explanation)}</div></div>`).join("")}</div>` : ""}
+              ${state.config.showPostReview && hasReleasedResults ? `<div class='bg-white rounded-xl shadow p-6'><h2 class='text-xl font-semibold mb-2'>Question Review</h2>${r.details.map((d, i) => `<div class='border rounded p-3 mb-2'><div class='font-semibold'>Q${i+1}: ${escapeHtml(d.stem)}</div><div class='text-sm mt-1'>Your answer: ${escapeHtml(d.selectedText || d.selected)}</div><div class='text-sm'>Correct answer: ${escapeHtml(d.correctText || d.correct)}</div><div class='text-xs text-gray-600 mt-1'>${escapeHtml(d.explanation)}</div></div>`).join("")}</div>` : ""}
             </div>
           `;
-          document.getElementById("downloadResultsJson").onclick = () => {
-            const payload = buildResultExportPayload(r);
-            download(`results-${r.token}.json`, JSON.stringify(payload, null, 2), "application/json");
-          };
-          document.getElementById("downloadReviewCsv").onclick = () => {
-            const csv = buildReviewCsv(r);
-            download(`review-${r.token}.csv`, csv, "text/csv");
-          };
+          const dlJson = document.getElementById("downloadResultsJson");
+          if (dlJson) {
+            dlJson.onclick = () => {
+              const payload = buildResultExportPayload(r);
+              download(`results-${r.token}.json`, JSON.stringify(payload, null, 2), "application/json");
+            };
+          }
+          const dlCsv = document.getElementById("downloadReviewCsv");
+          if (dlCsv) {
+            dlCsv.onclick = () => {
+              const csv = buildReviewCsv(r);
+              download(`review-${r.token}.csv`, csv, "text/csv");
+            };
+          }
+          const checkBtn = document.getElementById("checkReleasedBtn");
+          if (checkBtn) {
+            checkBtn.onclick = async () => {
+              try {
+                const released = await sessionApiFetch(`/session/${state.session.token}/result`);
+                state.currentResult = {
+                  ...released,
+                  resultsReleased: true,
+                  violations: state.violations.slice(),
+                  violationCount: state.violations.length
+                };
+                state.results[0] = state.currentResult;
+                saveJSON("mcq_results", state.results);
+                render();
+              } catch (err) {
+                alert(err.code === "results_not_released" ? "Results are still not released." : `Unable to fetch results: ${err.message}`);
+              }
+            };
+          }
           document.getElementById("exitAssessment").onclick = () => {
             const sid = String(r.student?.studentId || "");
             if (sid && !(state.exitedIds || []).includes(sid)) {
@@ -1145,8 +1455,8 @@
             i + 1,
             d.questionId || "",
             csvCell(d.stem),
-            csvCell(d.selected),
-            csvCell(d.correct),
+            csvCell(d.selectedText || d.selected),
+            csvCell(d.correctText || d.correct),
             d.isCorrect ? "true" : "false",
             csvCell(d.explanation)
           ].join(","));

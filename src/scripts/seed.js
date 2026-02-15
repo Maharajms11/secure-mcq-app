@@ -1,6 +1,6 @@
 import { pool } from "../db.js";
 import { config } from "../config.js";
-import { INTEGRITY_NOTICE } from "../utils.js";
+import { INTEGRITY_NOTICE, hashSecret } from "../utils.js";
 
 const questions = [
   {
@@ -140,8 +140,9 @@ async function run() {
       `INSERT INTO assessments (
          code, title, passcode, duration_seconds, draw_count, questions_per_category,
          show_post_review, fullscreen_enforcement, tab_warn_threshold, tab_autosubmit_threshold,
-         allow_retakes, integrity_notice, is_active, bank_code
-       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,true,$13)
+         allow_retakes, integrity_notice, is_active, bank_code, duration_minutes,
+         window_start, window_end, status, results_released, bank_allocations, passcode_hash
+       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,true,$13,$14,$15,$16,$17,$18,$19,$20)
        ON CONFLICT (code)
        DO UPDATE SET title = EXCLUDED.title,
                      passcode = EXCLUDED.passcode,
@@ -154,6 +155,13 @@ async function run() {
                      tab_autosubmit_threshold = EXCLUDED.tab_autosubmit_threshold,
                      allow_retakes = EXCLUDED.allow_retakes,
                      bank_code = EXCLUDED.bank_code,
+                     duration_minutes = EXCLUDED.duration_minutes,
+                     window_start = EXCLUDED.window_start,
+                     window_end = EXCLUDED.window_end,
+                     status = EXCLUDED.status,
+                     results_released = EXCLUDED.results_released,
+                     bank_allocations = EXCLUDED.bank_allocations,
+                     passcode_hash = EXCLUDED.passcode_hash,
                      integrity_notice = EXCLUDED.integrity_notice,
                      updated_at = NOW()`,
       [
@@ -169,7 +177,14 @@ async function run() {
         config.defaults.tabAutosubmitThreshold,
         config.defaults.allowRetakes,
         INTEGRITY_NOTICE,
-        "default"
+        "default",
+        config.defaults.durationMinutes,
+        new Date().toISOString(),
+        new Date(Date.now() + Math.max(1, config.defaults.windowHours) * 60 * 60 * 1000).toISOString(),
+        "active",
+        false,
+        JSON.stringify([{ bankCode: "default", count: config.defaults.drawCount }]),
+        hashSecret(config.defaults.passcode || "")
       ]
     );
 
@@ -179,16 +194,17 @@ async function run() {
         ["default", q.id]
       );
       await client.query(
-        `INSERT INTO bank_questions (bank_code, id, category, difficulty, stem, explanation, image)
-         VALUES ($1,$2,$3,$4,$5,$6,$7)
+        `INSERT INTO bank_questions (bank_code, id, category, difficulty, stem, explanation, image, topic_tag)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
          ON CONFLICT (bank_code, id)
          DO UPDATE SET category = EXCLUDED.category,
                        difficulty = EXCLUDED.difficulty,
                        stem = EXCLUDED.stem,
                        explanation = EXCLUDED.explanation,
+                       topic_tag = EXCLUDED.topic_tag,
                        image = EXCLUDED.image,
                        updated_at = NOW()`,
-        ["default", q.id, q.category, q.difficulty, q.stem, q.explanation, q.image]
+        ["default", q.id, q.category, q.difficulty, q.stem, q.explanation, q.image, q.category]
       );
       for (const d of q.distractors) {
         await client.query(
