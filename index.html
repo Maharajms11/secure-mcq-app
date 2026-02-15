@@ -61,10 +61,11 @@
 
       const APP_TITLE = "Secure MCQ Assessment";
       const API_BASE = (() => {
+        const sameOriginApi = `${location.origin}/api`;
         try {
-          return localStorage.getItem("mcq_api_base") || "https://secure-mcq-app.onrender.com/api";
+          return localStorage.getItem("mcq_api_base") || sameOriginApi;
         } catch {
-          return "https://secure-mcq-app.onrender.com/api";
+          return sameOriginApi;
         }
       })();
       const DEFAULT_CONFIG = {
