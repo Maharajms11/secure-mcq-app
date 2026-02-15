@@ -9,6 +9,7 @@
     body { background: #f8f7f4; }
     .no-select { user-select: none; -webkit-user-select: none; }
     .option-btn { min-height: 48px; width: 100%; display: block; cursor: pointer; }
+    .option-btn * { pointer-events: none; }
     .assessment-block::before {
       content: '';
       position: absolute;
@@ -109,13 +110,12 @@
         currentQuestionIndex: 0,
         answers: [],
         timer: { remainingMs: 0, startMs: 0, endMs: 0 },
-        ui: { overlay: null, inactivityOverlay: false, submitted: false, submitting: false, zoomWarning: false }
+        ui: { overlay: null, inactivityOverlay: false, submitted: false, submitting: false, advancing: false, zoomWarning: false }
       };
       state.activeAssessment = null;
       state.currentQuestionPayload = null;
       state.currentResult = null;
       state.eventGuardUntilMs = 0;
-      state.questionTimer = { totalMs: 0, remainingMs: 0, endMs: 0, timedOutHandled: false };
 
       const app = document.getElementById("app");
       if (app) {
@@ -207,20 +207,6 @@
         return String(v || "").replace(/[<>`]/g, "").trim();
       }
 
-      function computeQuestionSeconds(stem) {
-        const words = String(stem || "").trim().split(/\s+/).filter(Boolean).length;
-        const secs = Math.ceil(words * 0.6 * 3);
-        return Math.min(45, Math.max(15, secs));
-      }
-
-      function beginQuestionTimer(question) {
-        const secs = computeQuestionSeconds(question?.stem || "");
-        const now = Date.now();
-        state.questionTimer.totalMs = secs * 1000;
-        state.questionTimer.remainingMs = secs * 1000;
-        state.questionTimer.endMs = now + secs * 1000;
-        state.questionTimer.timedOutHandled = false;
-      }
 
       function uuid() {
         return crypto.randomUUID ? crypto.randomUUID() : "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, c => {
@@ -491,15 +477,6 @@
           const remaining = Math.max(0, state.timer.endMs - nowTick);
           state.timer.remainingMs = remaining;
           state.ui.zoomWarning = Math.abs((window.devicePixelRatio || 1) - 1) > 0.15;
-          if (state.currentQuestionPayload?.question && state.questionTimer.endMs) {
-            state.questionTimer.remainingMs = Math.max(0, state.questionTimer.endMs - nowTick);
-            if (state.questionTimer.remainingMs === 0 && !state.questionTimer.timedOutHandled) {
-              state.questionTimer.timedOutHandled = true;
-              logViolation("question_timeout", `q_index=${state.currentQuestionIndex + 1}`);
-              nextQuestion(true);
-              return;
-            }
-          }
           if (remaining === 0) {
             logViolation("timer_expired", "auto submit");
             submitAssessment(true);
@@ -574,13 +551,13 @@
           state.ui.inactivityOverlay = false;
           state.ui.submitted = false;
           state.ui.submitting = false;
+          state.ui.advancing = false;
           state.eventGuardUntilMs = Date.now() + 8000;
           lastActivityAt = Date.now();
 
           const first = await apiFetch(`/session/${start.token}/question`);
           state.currentQuestionPayload = first;
           state.currentQuestionIndex = Number(first.questionIndex || 0);
-          beginQuestionTimer(first.question);
 
           activateHardeners();
           startTimer(start.expiresAt);
@@ -596,13 +573,14 @@
         return state.currentQuestionPayload.question || null;
       }
 
-      async function nextQuestion(forceTimeout = false) {
-        if (!forceTimeout && state.selectedOptionId == null) return;
+      async function nextQuestion() {
+        if (state.ui.advancing) return;
+        if (state.selectedOptionId == null) return;
         const q = currentQuestion();
         if (!q) return;
         try {
-          const selected = forceTimeout ? null : state.selectedOptionId;
-          state.selectedOptionId = null;
+          const selected = state.selectedOptionId;
+          state.ui.advancing = true;
           render();
           const response = await apiFetch(`/session/${state.session.token}/answer`, {
             method: "POST",
@@ -625,6 +603,7 @@
             saveJSON("mcq_attempts", state.attempts);
             state.ui.submitted = true;
             state.ui.submitting = false;
+            state.ui.advancing = false;
             stopTimer();
             deactivateHardeners();
             state.route = "results";
@@ -634,13 +613,15 @@
 
           state.currentQuestionPayload = response.next;
           state.currentQuestionIndex = Number(response.next?.questionIndex || state.currentQuestionIndex + 1);
-          beginQuestionTimer(response.next?.question);
           if (Number.isFinite(Number(response.remainingMs))) {
             state.timer.remainingMs = Math.max(0, Number(response.remainingMs));
           }
+          state.selectedOptionId = null;
+          state.ui.advancing = false;
           rerollHatchAngle();
           render();
         } catch (err) {
+          state.ui.advancing = false;
           alert(`Unable to submit answer: ${err.message}`);
           render();
         }
@@ -670,12 +651,14 @@
 
           state.ui.submitting = false;
           state.ui.submitted = true;
+          state.ui.advancing = false;
           stopTimer();
           deactivateHardeners();
           state.route = "results";
           render();
         } catch (err) {
           state.ui.submitting = false;
+          state.ui.advancing = false;
           alert(`Unable to submit assessment: ${err.message}`);
           render();
         }
@@ -759,12 +742,6 @@
         if (ms <= 2 * 60 * 1000) return "text-red-700 bg-red-100 border-red-300";
         if (ms <= 10 * 60 * 1000) return "text-amber-700 bg-amber-100 border-amber-300";
         return "text-emerald-700 bg-emerald-100 border-emerald-300";
-      }
-
-      function questionTimerBadgeClass(ms, totalMs) {
-        if (ms <= totalMs * 0.2) return "text-red-700 bg-red-100 border-red-300";
-        if (ms <= totalMs * 0.5) return "text-amber-700 bg-amber-100 border-amber-300";
-        return "text-blue-700 bg-blue-100 border-blue-300";
       }
 
       function fmt(ms) {
@@ -1031,7 +1008,6 @@
               <div class="max-w-5xl mx-auto px-3 py-2 flex items-center justify-between gap-2 text-sm">
                 <div class="font-semibold truncate">${escapeHtml(state.session.identity.fullName)} | ${escapeHtml(state.config.title)}</div>
                 <div class="px-2 py-1 border rounded ${timerBadgeClass(state.timer.remainingMs)}">${fmt(state.timer.remainingMs)}</div>
-                <div class="px-2 py-1 border rounded ${questionTimerBadgeClass(state.questionTimer.remainingMs, state.questionTimer.totalMs || 1)}">Q: ${fmt(state.questionTimer.remainingMs)}</div>
                 <div>Question ${idx} of ${n}</div>
                 ${state.config.fullscreenEnforcement && !document.fullscreenElement ? `<button id="enterFsBtn" class="px-2 py-1 rounded bg-slate-700 text-white text-xs">Enter Fullscreen</button>` : ""}
               </div>
@@ -1048,12 +1024,12 @@
                   <h2 class="text-xl md:text-2xl font-semibold leading-snug">${escapeHtml(q.stem)}</h2>
                   <div class="mt-4 space-y-2">
                     ${(q.options || []).map(d => `
-                      <button data-option="${escapeHtml(d.originalId)}" class="option-btn relative z-40 w-full text-left border rounded-lg px-4 py-3 bg-white/90 hover:bg-slate-50 ${state.selectedOptionId === d.originalId ? "border-blue-600 ring-2 ring-blue-200" : "border-gray-300"}">
+                      <button type="button" data-option="${escapeHtml(d.originalId)}" class="option-btn relative z-40 w-full text-left border rounded-lg px-4 py-3 bg-white/90 hover:bg-slate-50 ${state.selectedOptionId === d.originalId ? "border-blue-600 ring-2 ring-blue-200" : "border-gray-300"}">
                         <span class="font-semibold mr-2">${d.displayLabel}.</span>${escapeHtml(d.text)}
                       </button>
                     `).join("")}
                   </div>
-                  <button id="nextBtn" class="relative z-40 mt-5 w-full md:w-auto px-6 py-3 rounded font-semibold ${state.selectedOptionId ? "bg-blue-700 text-white" : "bg-gray-300 text-gray-600 cursor-not-allowed"}" ${state.selectedOptionId ? "" : "disabled"}>${idx === n ? "Submit" : "Next Question"}</button>
+                  <button id="nextBtn" type="button" class="relative z-40 mt-5 w-full md:w-auto px-6 py-3 rounded font-semibold ${(state.selectedOptionId && !state.ui.advancing) ? "bg-blue-700 text-white" : "bg-gray-300 text-gray-600 cursor-not-allowed"}" ${(state.selectedOptionId && !state.ui.advancing) ? "" : "disabled"}>${state.ui.advancing ? "Submitting..." : (idx === n ? "Submit" : "Next Question")}</button>
                 </div>
               </section>
             </main>
@@ -1067,7 +1043,7 @@
           // Robust option capture for full-row taps/clicks.
           const questionCard = document.getElementById("questionCard");
           if (questionCard) {
-            questionCard.onclick = (e) => {
+            questionCard.onpointerdown = (e) => {
               const btn = e.target.closest("[data-option]");
               if (!btn) return;
               state.selectedOptionId = btn.getAttribute("data-option");
@@ -1075,12 +1051,12 @@
             };
           }
           document.querySelectorAll("[data-option]").forEach((btn) => {
-            btn.onclick = () => {
+            btn.onpointerdown = () => {
               state.selectedOptionId = btn.getAttribute("data-option");
               render();
             };
           });
-          document.getElementById("nextBtn").onclick = () => nextQuestion(false);
+          document.getElementById("nextBtn").onpointerdown = () => nextQuestion();
           const fsBtn = document.getElementById("enterFsBtn");
           if (fsBtn) fsBtn.onclick = () => requestFullscreenIfEnabled();
           const d = document.getElementById("dismissOverlay");

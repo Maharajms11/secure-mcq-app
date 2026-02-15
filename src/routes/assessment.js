@@ -2,6 +2,16 @@ import { query, withTx } from "../db.js";
 import { redis } from "../redis.js";
 import { fisherYates, parseJsonObjectOrEmpty, randomUuid, sanitizeText } from "../utils.js";
 
+function computeQuestionSeconds(stem) {
+  const words = String(stem || "").trim().split(/\s+/).filter(Boolean).length;
+  const secs = Math.ceil(words * 0.6 * 3);
+  return Math.min(45, Math.max(1, secs));
+}
+
+function computePaperDurationSeconds(questions) {
+  return (questions || []).reduce((sum, q) => sum + computeQuestionSeconds(q.stem), 0);
+}
+
 function buildSessionQuestions(rawQuestions) {
   return rawQuestions.map((q) => {
     const shuffledOptions = fisherYates(q.options || []).map((o, idx) => ({
@@ -262,7 +272,8 @@ export default async function assessmentRoutes(fastify) {
     const token = randomUuid();
     const seed = randomUuid();
     const startedAtIso = new Date().toISOString();
-    const expiresAtIso = new Date(Date.now() + Number(assessment.duration_seconds) * 1000).toISOString();
+    const computedDurationSeconds = computePaperDurationSeconds(snapshot);
+    const expiresAtIso = new Date(Date.now() + computedDurationSeconds * 1000).toISOString();
 
     await query(
       `INSERT INTO sessions (
@@ -299,7 +310,7 @@ export default async function assessmentRoutes(fastify) {
       assessment: {
         code: assessment.code,
         title: assessment.title,
-        durationSeconds: assessment.duration_seconds,
+        durationSeconds: computedDurationSeconds,
         drawCount: assessment.draw_count,
         showPostReview: assessment.show_post_review,
         fullscreenEnforcement: assessment.fullscreen_enforcement,
