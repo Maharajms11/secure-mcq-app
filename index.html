@@ -1589,7 +1589,7 @@
                 <input id="fullName" class="w-full border rounded p-2" placeholder="Full Name">
                 <input id="studentId" class="w-full border rounded p-2" placeholder="Student/Employee ID">
                 <input id="studentEmail" type="text" class="w-full border rounded p-2" placeholder="Email address (for result notification)">
-                <input id="assessmentCode" class="w-full border rounded p-2" placeholder="Assessment Code (default: ASSESS-2026)">
+                <input id="assessmentCode" class="w-full border rounded p-2" placeholder="Assessment Code (leave blank to use active test)">
                 <input id="passcode" class="w-full border rounded p-2" placeholder="Assessment Passcode (if required)">
                 <label class="flex items-start gap-2 text-sm"><input id="honesty" type="checkbox" class="mt-1">I confirm I will complete this assessment honestly and without assistance.</label>
                 <pre class="whitespace-pre-wrap text-sm bg-gray-50 border rounded p-3">${escapeHtml(noticeText)}</pre>
@@ -1602,7 +1602,7 @@
             const fullName = sanitizeInput(document.getElementById("fullName").value);
             const studentId = sanitizeInput(document.getElementById("studentId").value);
             const email = sanitizeInput(document.getElementById("studentEmail").value);
-            const assessmentCode = sanitizeInput(document.getElementById("assessmentCode").value) || "ASSESS-2026";
+            const assessmentCode = sanitizeInput(document.getElementById("assessmentCode").value);
             const passcode = sanitizeInput(document.getElementById("passcode").value);
             const honest = document.getElementById("honesty").checked;
 
