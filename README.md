@@ -25,7 +25,6 @@
 - `GET /api/health`
 - `GET /api/assessment/active`
 - `POST /api/auth/start`
-- `GET /api/results/:accessToken` (public released-result link from email)
 - `GET /api/session/:token/state`
 - `GET /api/session/:token/question`
 - `POST /api/session/:token/answer`
@@ -60,17 +59,6 @@ Use `Authorization: Bearer <admin_jwt>` for admin endpoints.
 - Timer integrity is enforced from server `expires_at` on every question/answer action.
 - Per-client paper generation supports multi-bank allocations, and question/distractor order is randomized once at session initialization and stored immutably in `sessions.questions_snapshot`.
 - Violation events are persisted in PostgreSQL and counted in final results.
-- Result visibility is release-gated by admin (`results_released`).
-- Student email is captured at login. When admin releases results, email notifications can be sent with a per-student secure results link.
+- Result visibility is automatic at test window close (admin can still enable early release via `results_released`).
+- Student email is captured at login for future workflow use, but no email notifications are sent.
 - Redis is used for ephemeral counters/cache and can be extended for live proctoring dashboards.
-
-## Email Notification Env Vars
-
-- `EMAIL_NOTIFICATIONS_ENABLED=true`
-- `PUBLIC_BASE_URL=https://your-render-service.onrender.com`
-- `SMTP_FROM=Assessments <no-reply@yourdomain.com>`
-- `SMTP_HOST=smtp.yourprovider.com`
-- `SMTP_PORT=587`
-- `SMTP_SECURE=false`
-- `SMTP_USER=...`
-- `SMTP_PASS=...`

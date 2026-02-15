@@ -1,7 +1,6 @@
 import { query, withTx } from "../db.js";
 import { config } from "../config.js";
 import { parseAikenText } from "../aiken.js";
-import { sendResultsReleasedEmail } from "../mailer.js";
 import { enforceRateLimit } from "../rate-limit.js";
 import {
   csvEscape,
@@ -120,24 +119,11 @@ function parseDateOrNull(value) {
   return d;
 }
 
-function getPublicBaseUrl(request) {
-  if (config.publicBaseUrl) return String(config.publicBaseUrl).replace(/\/+$/, "");
-  const proto = String(request.headers["x-forwarded-proto"] || "https");
-  const host = String(request.headers["x-forwarded-host"] || request.headers.host || "");
-  return host ? `${proto}://${host}` : "";
-}
-
-function summarizeError(err) {
-  if (!err) return "unknown_error";
-  if (typeof err === "string") return err;
-  if (err?.response) return String(err.response);
-  if (err?.code && err?.message) return `${err.code}: ${err.message}`;
-  if (err?.message) return String(err.message);
-  try {
-    return JSON.stringify(err);
-  } catch {
-    return "unknown_error";
-  }
+function parseCsvList(value) {
+  return String(value || "")
+    .split(",")
+    .map((v) => sanitizeText(v))
+    .filter(Boolean);
 }
 
 function buildSubmissionExportSql(filter) {
@@ -151,6 +137,8 @@ function buildSubmissionExportSql(filter) {
   if (filter.bankCode) clauses.push(`COALESCE(d.detail->>'bankCode','') = ${push(filter.bankCode)}`);
   if (filter.topicTag) clauses.push(`COALESCE(d.detail->>'topicTag','') = ${push(filter.topicTag)}`);
   if (filter.difficulty) clauses.push(`COALESCE(d.detail->>'difficulty','') = ${push(filter.difficulty)}`);
+  if (filter.testCodes?.length) clauses.push(`a.code = ANY(${push(filter.testCodes)}::text[])`);
+  if (filter.studentIds?.length) clauses.push(`s.student_id = ANY(${push(filter.studentIds)}::text[])`);
 
   const whereSql = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
   const sql = `
@@ -168,6 +156,7 @@ function buildSubmissionExportSql(filter) {
       COALESCE(d.detail->>'difficulty','') AS difficulty,
       COALESCE(d.detail->>'topicTag','') AS topic_tag
     FROM submissions s
+    JOIN assessments a ON a.id = s.assessment_id
     CROSS JOIN LATERAL jsonb_array_elements(s.result_payload->'details') AS d(detail)
     ${whereSql}
     ORDER BY s.submitted_at DESC
@@ -510,93 +499,14 @@ export default async function adminRoutes(fastify) {
       [code, released]
     );
     if (!out.rows[0]) return reply.code(404).send({ error: "test_not_found" });
-
-    if (!released) {
-      return { ...out.rows[0], notificationSummary: { notified: 0, failed: 0, skipped: 0 } };
-    }
-
-    await query(
-      `UPDATE sessions se
-       SET result_access_token = gen_random_uuid()
-       FROM assessments a
-       WHERE se.assessment_id = a.id
-         AND a.code = $1
-         AND se.result_access_token IS NULL`,
-      [code]
-    );
-
-    const recipientsOut = await query(
-      `SELECT se.student_name, se.student_email, se.result_access_token, su.submitted_at, a.title
-       FROM sessions se
-       JOIN submissions su ON su.session_token = se.token
-       JOIN assessments a ON a.id = se.assessment_id
-       WHERE a.code = $1
-         AND COALESCE(se.student_email, '') <> ''
-       ORDER BY su.submitted_at DESC`,
-      [code]
-    );
-
-    const byEmail = new Map();
-    for (const row of recipientsOut.rows) {
-      const email = sanitizeText(row.student_email || "").toLowerCase();
-      if (!email) continue;
-      if (!byEmail.has(email)) byEmail.set(email, row);
-    }
-    const recipients = [...byEmail.values()];
-    const baseUrl = getPublicBaseUrl(request);
-
-    let notified = 0;
-    let failed = 0;
-    let skipped = 0;
-    const failedDetails = [];
-    const skippedDetails = [];
-
-    if (!baseUrl) {
-      skipped = recipients.length;
-      skippedDetails.push("PUBLIC_BASE_URL missing or invalid");
-    } else {
-      const settled = await Promise.allSettled(
-        recipients.map((row) => {
-          const access = String(row.result_access_token || "");
-          if (!access) {
-            return Promise.resolve({ sent: false, reason: "missing_access_token" });
-          }
-          const resultsUrl = `${baseUrl}/#/released-results?access=${encodeURIComponent(access)}`;
-          return sendResultsReleasedEmail({
-            to: row.student_email,
-            studentName: row.student_name,
-            testName: row.title || code,
-            resultsUrl
-          });
-        })
-      );
-      for (let i = 0; i < settled.length; i += 1) {
-        const entry = settled[i];
-        const recipient = recipients[i];
-        const email = String(recipient?.student_email || "");
-        if (entry.status === "fulfilled" && entry.value?.sent) {
-          notified += 1;
-        } else if (entry.status === "fulfilled" && entry.value?.reason) {
-          skipped += 1;
-          skippedDetails.push(`${email}: ${entry.value.reason}`);
-        } else {
-          failed += 1;
-          const reason = summarizeError(entry.status === "rejected" ? entry.reason : entry.value);
-          failedDetails.push(`${email}: ${reason}`);
-          fastify.log.error({ err: entry.status === "rejected" ? entry.reason : entry.value, email, code }, "email notification failed");
-        }
-      }
-    }
-
     return {
       ...out.rows[0],
       notificationSummary: {
-        recipients: recipients.length,
-        notified,
-        failed,
-        skipped,
-        failedDetails: failedDetails.slice(0, 20),
-        skippedDetails: skippedDetails.slice(0, 20)
+        recipients: 0,
+        notified: 0,
+        failed: 0,
+        skipped: 0,
+        skippedDetails: ["Email notifications are disabled. Results become visible at test window close."]
       }
     };
   });
@@ -737,6 +647,8 @@ export default async function adminRoutes(fastify) {
     const minScore = Number.isFinite(Number(q.minScore)) ? Number(q.minScore) : 0;
     const maxScore = Number.isFinite(Number(q.maxScore)) ? Number(q.maxScore) : 100;
     const withViolations = q.withViolations === "true" ? true : q.withViolations === "false" ? false : null;
+    const testCodes = parseCsvList(q.testCodes || q.testCode);
+    const studentIds = parseCsvList(q.studentIds || q.studentId);
 
     const out = await query(
       `SELECT s.*, a.code AS test_code, a.title AS test_name, a.results_released
@@ -744,9 +656,11 @@ export default async function adminRoutes(fastify) {
        JOIN assessments a ON a.id = s.assessment_id
        WHERE s.percentage BETWEEN $1 AND $2
          AND ($3::boolean IS NULL OR (s.violation_count > 0) = $3)
+         AND (cardinality($4::text[]) = 0 OR a.code = ANY($4::text[]))
+         AND (cardinality($5::text[]) = 0 OR s.student_id = ANY($5::text[]))
        ORDER BY s.submitted_at DESC
        LIMIT 500`,
-      [minScore, maxScore, withViolations]
+      [minScore, maxScore, withViolations, testCodes, studentIds]
     );
     return out.rows;
   });
@@ -800,7 +714,9 @@ export default async function adminRoutes(fastify) {
     const filters = {
       bankCode: normalizeBankCode(request.query?.bankCode || ""),
       topicTag: sanitizeText(request.query?.topicTag || ""),
-      difficulty: sanitizeText(request.query?.difficulty || "").toLowerCase()
+      difficulty: sanitizeText(request.query?.difficulty || "").toLowerCase(),
+      testCodes: parseCsvList(request.query?.testCodes || request.query?.testCode),
+      studentIds: parseCsvList(request.query?.studentIds || request.query?.studentId)
     };
     const { sql, params } = buildSubmissionExportSql(filters);
     const out = await query(sql, params);

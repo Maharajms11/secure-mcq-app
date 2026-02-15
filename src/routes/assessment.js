@@ -72,24 +72,31 @@ function getWindowRemainingMs(session) {
   return Math.max(0, new Date(session.window_end_at).getTime() - Date.now());
 }
 
-function buildSubmittedResponse(resultPayload, resultsReleased) {
-  if (resultsReleased) {
+function isResultsVisible(resultsReleased, windowEndAt) {
+  const released = !!resultsReleased;
+  if (released) return true;
+  if (!windowEndAt) return false;
+  return Date.now() >= new Date(windowEndAt).getTime();
+}
+
+function buildSubmittedResponse(resultPayload, resultsVisible) {
+  if (resultsVisible) {
     return { resultsReleased: true, result: resultPayload };
   }
   return {
     resultsReleased: false,
     token: resultPayload.token,
     submittedAt: resultPayload.submittedAt,
-    message: "Submission received. Results will appear when released by the admin."
+    message: "Submission received. Results will appear at test window close."
   };
 }
 
 async function finalizeSession(client, session, autoSubmitted, terminatedReason = null) {
   const assessmentRes = await client.query(
-    "SELECT code, title, results_released FROM assessments WHERE id = $1",
+    "SELECT code, title, results_released, window_end FROM assessments WHERE id = $1",
     [session.assessment_id]
   );
-  const assessment = assessmentRes.rows[0] || { code: "", title: "", results_released: false };
+  const assessment = assessmentRes.rows[0] || { code: "", title: "", results_released: false, window_end: null };
 
   if (session.status === "submitted") {
     const existing = await client.query(
@@ -98,7 +105,7 @@ async function finalizeSession(client, session, autoSubmitted, terminatedReason 
     );
     return {
       resultPayload: existing.rows[0]?.result_payload || null,
-      resultsReleased: !!assessment.results_released
+      resultsReleased: isResultsVisible(assessment.results_released, assessment.window_end)
     };
   }
 
@@ -207,7 +214,7 @@ async function finalizeSession(client, session, autoSubmitted, terminatedReason 
 
   return {
     resultPayload,
-    resultsReleased: !!assessment.results_released
+    resultsReleased: isResultsVisible(assessment.results_released, assessment.window_end)
   };
 }
 
@@ -748,7 +755,7 @@ export default async function assessmentRoutes(fastify) {
   fastify.get("/session/:token/result", { preHandler: fastify.sessionAuth }, async (request, reply) => {
     const token = request.params.token;
     const out = await query(
-      `SELECT s.result_payload, a.results_released
+      `SELECT s.result_payload, a.results_released, a.window_end
        FROM submissions s
        JOIN sessions se ON se.token = s.session_token
        JOIN assessments a ON a.id = se.assessment_id
@@ -758,30 +765,7 @@ export default async function assessmentRoutes(fastify) {
     if (!out.rows[0]) {
       return reply.code(404).send({ error: "result_not_found" });
     }
-    if (!out.rows[0].results_released) {
-      return reply.code(403).send({ error: "results_not_released" });
-    }
-    return out.rows[0].result_payload;
-  });
-
-  // Public result endpoint for email deep-links.
-  fastify.get("/results/:accessToken", async (request, reply) => {
-    const accessToken = sanitizeText(request.params.accessToken || "");
-    if (!accessToken) return reply.code(400).send({ error: "access_token_required" });
-
-    const out = await query(
-      `SELECT sub.result_payload, a.results_released
-       FROM sessions se
-       JOIN submissions sub ON sub.session_token = se.token
-       JOIN assessments a ON a.id = se.assessment_id
-       WHERE se.result_access_token::text = $1
-       LIMIT 1`,
-      [accessToken]
-    );
-    if (!out.rows[0]) {
-      return reply.code(404).send({ error: "result_not_found" });
-    }
-    if (!out.rows[0].results_released) {
+    if (!isResultsVisible(out.rows[0].results_released, out.rows[0].window_end)) {
       return reply.code(403).send({ error: "results_not_released" });
     }
     return out.rows[0].result_payload;
