@@ -183,10 +183,6 @@ WHERE (bank_allocations = '[]'::jsonb OR bank_allocations IS NULL)
   AND bank_code IS NOT NULL
   AND draw_count > 0;
 
-UPDATE assessments
-SET passcode_hash = 'sha256$' || encode(digest(passcode, 'sha256'), 'hex')
-WHERE passcode_hash = '' AND passcode <> '';
-
 ALTER TABLE bank_questions
   ADD COLUMN IF NOT EXISTS topic_tag TEXT NOT NULL DEFAULT '';
 
