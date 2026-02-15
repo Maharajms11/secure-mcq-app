@@ -147,6 +147,8 @@
       let inactivityTimerId = null;
       let lastActivityAt = Date.now();
       let blurCounted = false;
+      let devtoolsConsecutiveHits = 0;
+      let lastDevtoolsAlertAt = 0;
 
       window.addEventListener("hashchange", () => {
         state.route = (location.hash || "#/login").startsWith("#/admin") ? "admin" : "login";
@@ -422,7 +424,19 @@
       function checkDevtools() {
         const wGap = window.outerWidth - window.innerWidth;
         const hGap = window.outerHeight - window.innerHeight;
-        if (wGap > 160 || hGap > 160) {
+        const now = Date.now();
+        // Best-effort heuristic only: require repeated suspicious readings and apply cooldown
+        // to reduce false positives on uncommon monitors/browser UI layouts.
+        const suspicious = (wGap > 280 || hGap > 220);
+        if (suspicious) {
+          devtoolsConsecutiveHits += 1;
+        } else {
+          devtoolsConsecutiveHits = 0;
+        }
+
+        const cooldownMs = 90000;
+        if (devtoolsConsecutiveHits >= 3 && (now - lastDevtoolsAlertAt) > cooldownMs) {
+          lastDevtoolsAlertAt = now;
           logViolation("devtools_suspected", `gap:${wGap}x${hGap}`);
           state.ui.overlay = "Developer tools suspected. This event has been logged.";
           render();
