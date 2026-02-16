@@ -692,16 +692,6 @@
 
       async function startAssessment(identity) {
         const id = sanitizeInput(identity.studentId);
-        if ((state.exitedIds || []).includes(id)) {
-          alert("This student ID is locked and cannot attempt this assessment again.");
-          return;
-        }
-        const prior = Number(state.attempts[id] || 0);
-        if (prior >= Number(state.config.allowRetakes) + 1) {
-          alert("Attempt limit reached for this ID.");
-          return;
-        }
-
         try {
           const start = await apiFetch("/auth/start", {
             method: "POST",
@@ -782,6 +772,47 @@
           if (err.code === "session_terminated_after_second_disconnect") {
             alert("Session terminated after second disconnect and auto-submitted.");
             state.currentResult = err.payload?.result || null;
+            state.route = "results";
+            render();
+            return;
+          }
+          if (err.code === "attempt_limit_reached") {
+            const payload = err.payload || {};
+            const identityResolved = {
+              fullName: sanitizeInput(identity.fullName) || `Student ${id}`,
+              studentId: id,
+              email: sanitizeInput(identity.email || "")
+            };
+            if (payload.resultsReleased && payload.result) {
+              state.currentResult = {
+                ...payload.result,
+                resultsReleased: true,
+                student: payload.result?.student || identityResolved,
+                violations: payload.result?.violations || [],
+                violationCount: Number(payload.result?.violationCount || payload.result?.violation_count || 0)
+              };
+            } else {
+              state.currentResult = {
+                token: payload.token || payload.result?.token || "",
+                submittedAt: payload.submittedAt || payload.result?.submittedAt || new Date().toISOString(),
+                score: null,
+                total: state.config.drawCount,
+                percentage: null,
+                timeTakenMs: 0,
+                violationCount: 0,
+                resultsReleased: false,
+                pendingMessage: payload.message || "You already submitted this assessment. Results will be available at test window close.",
+                student: payload.result?.student || identityResolved,
+                details: [],
+                violations: []
+              };
+            }
+            if (state.currentResult) {
+              state.results = [state.currentResult].concat(state.results);
+              saveJSON("mcq_results", state.results);
+            }
+            state.session = null;
+            alert("This student already attempted this assessment. Opening results.");
             state.route = "results";
             render();
             return;
@@ -1761,7 +1792,7 @@
                 <p class="text-sm text-gray-600 mt-2">Assessment Reference Number: <code>${escapeHtml(r.token)}</code></p>
                 <div class="mt-3">
                   ${hasReleasedResults ? `<button id="downloadResultsJson" class="px-4 py-2 rounded bg-gray-900 text-white">Download Results (JSON)</button>
-                  <button id="downloadReviewCsv" class="ml-2 px-4 py-2 rounded bg-slate-700 text-white">Download Review (CSV)</button>` : `<button id="checkReleasedBtn" class="px-4 py-2 rounded bg-blue-700 text-white">Check Results</button>`}
+                  <button id="downloadReviewCsv" class="ml-2 px-4 py-2 rounded bg-slate-700 text-white">Download Review (CSV)</button>` : `${state.session?.authToken ? `<button id="checkReleasedBtn" class="px-4 py-2 rounded bg-blue-700 text-white">Check Results</button>` : ""}`}
                   <button id="exitAssessment" class="ml-2 px-4 py-2 rounded bg-red-700 text-white">Exit</button>
                 </div>
               </div>

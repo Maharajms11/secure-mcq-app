@@ -334,7 +334,32 @@ export default async function assessmentRoutes(fastify) {
     );
     const attempts = attemptsRes.rows[0]?.count || 0;
     if (attempts > Number(assessment.allow_retakes || 0)) {
-      return reply.code(403).send({ error: "attempt_limit_reached", attempts });
+      const latestSubmissionRes = await query(
+        `SELECT result_payload, submitted_at
+         FROM submissions
+         WHERE assessment_id = $1 AND student_id = $2
+         ORDER BY submitted_at DESC
+         LIMIT 1`,
+        [assessment.id, studentId]
+      );
+      const latestResultPayload = latestSubmissionRes.rows[0]?.result_payload || null;
+      const resultsReleased = isResultsVisible(assessment.results_released, assessment.window_end);
+      if (latestResultPayload) {
+        return reply.code(403).send({
+          error: "attempt_limit_reached",
+          attempts,
+          alreadySubmitted: true,
+          ...buildSubmittedResponse(latestResultPayload, resultsReleased)
+        });
+      }
+      return reply.code(403).send({
+        error: "attempt_limit_reached",
+        attempts,
+        alreadySubmitted: true,
+        resultsReleased: false,
+        submittedAt: latestSubmissionRes.rows[0]?.submitted_at || null,
+        message: "This student already submitted this assessment."
+      });
     }
 
     const existingSessionRes = await query(
