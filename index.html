@@ -992,6 +992,39 @@
         return `${m}:${s}`;
       }
 
+      function adminStatusMeta(status) {
+        const s = String(status || "draft").toLowerCase();
+        if (s === "active") {
+          return {
+            label: "ACTIVE",
+            boxClass: "border-emerald-400 bg-emerald-50",
+            textClass: "text-emerald-800",
+            note: "Students can access this test only if it is set active and they are within the test window."
+          };
+        }
+        if (s === "closed") {
+          return {
+            label: "CLOSED",
+            boxClass: "border-red-400 bg-red-50",
+            textClass: "text-red-800",
+            note: "Students cannot start this test while it is closed."
+          };
+        }
+        return {
+          label: "DRAFT",
+          boxClass: "border-amber-400 bg-amber-50",
+          textClass: "text-amber-800",
+          note: "Students cannot start this test until you set status to active."
+        };
+      }
+
+      function fmtAdminDate(v) {
+        if (!v) return "not set";
+        const d = new Date(v);
+        if (Number.isNaN(d.getTime())) return "invalid date";
+        return d.toLocaleString();
+      }
+
       async function refreshAdminData() {
         const params = new URLSearchParams();
         const testCodes = sanitizeInput(state.adminFilters?.testCodes || "");
@@ -1017,6 +1050,9 @@
         const tests = state.adminData.tests || [];
         const results = state.adminData.results || [];
         const analytics = state.adminData.analytics || [];
+        const draftStatusMeta = adminStatusMeta(state.adminDraft.status);
+        const activeTest = tests.find((t) => String(t.status || "").toLowerCase() === "active");
+        const activeStatusMeta = adminStatusMeta(activeTest?.status || "draft");
         const allocationRows = (state.adminDraft.allocations || []).map((a, i) => `
           <div class="grid grid-cols-12 gap-2 items-center mb-2" data-alloc-row="${i}">
             <select class="col-span-7 border rounded p-2 alloc-bank">
@@ -1034,6 +1070,16 @@
             <div class="bg-white rounded-xl shadow p-4">
               <h1 class="text-2xl font-bold">Admin Panel</h1>
               <p class="text-sm text-gray-600">Test banks, test configuration, results, analytics</p>
+              <div class="mt-3 border-2 rounded-lg p-3 ${activeTest ? activeStatusMeta.boxClass : "border-red-400 bg-red-50"}">
+                <p class="text-xs font-semibold uppercase tracking-wider ${activeTest ? activeStatusMeta.textClass : "text-red-800"}">Current Live Test Status</p>
+                ${activeTest ? `
+                  <p class="text-lg font-bold ${activeStatusMeta.textClass}">${activeStatusMeta.label}: ${escapeHtml(activeTest.code || "")}</p>
+                  <p class="text-sm ${activeStatusMeta.textClass}">Window: ${escapeHtml(fmtAdminDate(activeTest.window_start))} → ${escapeHtml(fmtAdminDate(activeTest.window_end))}</p>
+                ` : `
+                  <p class="text-lg font-bold text-red-800">NO ACTIVE TEST</p>
+                  <p class="text-sm text-red-800">Students will not be able to start until a test is set to active.</p>
+                `}
+              </div>
               <button id="adminLogout" class="mt-2 px-3 py-2 rounded bg-gray-800 text-white">Logout</button>
               <button id="resetUploadedBtn" class="mt-2 ml-2 px-3 py-2 rounded bg-red-700 text-white">Reset Uploaded Data</button>
             </div>
@@ -1060,6 +1106,11 @@
 
               <div class="bg-white rounded-xl shadow p-4 space-y-3">
                 <h2 class="text-xl font-semibold">Create / Save Test Configuration</h2>
+                <div class="border-2 rounded-lg p-3 ${draftStatusMeta.boxClass}">
+                  <p class="text-xs font-semibold uppercase tracking-wider ${draftStatusMeta.textClass}">Draft Test Status</p>
+                  <p class="text-2xl font-extrabold ${draftStatusMeta.textClass}">${draftStatusMeta.label}</p>
+                  <p class="text-sm ${draftStatusMeta.textClass}">${escapeHtml(draftStatusMeta.note)}</p>
+                </div>
                 <label class="block text-sm">Test name <input id="testNameInput" class="w-full border rounded p-2" value="${escapeHtml(state.adminDraft.testName || "")}" placeholder="Midterm March 2026"></label>
                 <label class="block text-sm">Test code <input id="testCodeInput" class="w-full border rounded p-2" value="${escapeHtml(state.adminDraft.testCode || "")}" placeholder="MIDTERM-2026-03"></label>
                 <div class="grid grid-cols-2 gap-2">
@@ -1241,6 +1292,13 @@
           });
 
           document.getElementById("adminLogout").onclick = () => {
+            captureAdminDraftFromForm(true);
+            const draftCode = state.adminDraft.testCode || "(no code)";
+            const draftStatus = String(state.adminDraft.status || "draft").toUpperCase();
+            const liveActive = (state.adminData.tests || []).find((t) => String(t.status || "").toLowerCase() === "active");
+            const liveLabel = liveActive ? `${liveActive.code} (${String(liveActive.status || "").toUpperCase()})` : "NONE";
+            const msg = `Before logout, confirm test status:\n\nDraft config: ${draftCode} is ${draftStatus}\nCurrently active test: ${liveLabel}\n\nStudents can only start ACTIVE tests within the window.\n\nLogout now?`;
+            if (!confirm(msg)) return;
             state.adminAuthed = false;
             state.adminToken = "";
             render();
