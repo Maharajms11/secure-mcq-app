@@ -15,6 +15,13 @@ const app = Fastify({ logger: true });
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const indexPath = path.resolve(__dirname, "../index.html");
+const keccakPath = path.resolve(__dirname, "../keccak-model.html");
+
+async function serveHtml(reply, filePath) {
+  const html = await fs.readFile(filePath, "utf8");
+  reply.type("text/html; charset=utf-8");
+  return html;
+}
 
 await app.register(cors, { origin: true, credentials: false });
 await app.register(jwt, { secret: config.jwtSecret });
@@ -25,15 +32,19 @@ await app.register(adminRoutes, { prefix: "/api" });
 
 // Serve the client app at the root so the Render URL works for testers.
 app.get("/", async (request, reply) => {
-  const html = await fs.readFile(indexPath, "utf8");
-  reply.type("text/html; charset=utf-8");
-  return html;
+  return serveHtml(reply, indexPath);
 });
 
 app.get("/index.html", async (request, reply) => {
-  const html = await fs.readFile(indexPath, "utf8");
-  reply.type("text/html; charset=utf-8");
-  return html;
+  return serveHtml(reply, indexPath);
+});
+
+app.get("/keccak", async (request, reply) => {
+  return serveHtml(reply, keccakPath);
+});
+
+app.get("/keccak-model.html", async (request, reply) => {
+  return serveHtml(reply, keccakPath);
 });
 
 app.setErrorHandler((err, request, reply) => {
