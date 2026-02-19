@@ -1,6 +1,9 @@
 import Fastify from "fastify";
 import cors from "@fastify/cors";
 import jwt from "@fastify/jwt";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { config } from "./config.js";
 import { pool } from "./db.js";
 import { redis } from "./redis.js";
@@ -9,6 +12,16 @@ import assessmentRoutes from "./routes/assessment.js";
 import adminRoutes from "./routes/admin.js";
 
 const app = Fastify({ logger: true });
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const indexPath = path.resolve(__dirname, "../index.html");
+const keccakPath = path.resolve(__dirname, "../keccak-model.html");
+
+async function serveHtml(reply, filePath) {
+  const html = await fs.readFile(filePath, "utf8");
+  reply.type("text/html; charset=utf-8");
+  return html;
+}
 
 await app.register(cors, { origin: true, credentials: false });
 await app.register(jwt, { secret: config.jwtSecret });
@@ -16,6 +29,23 @@ await app.register(authPlugin);
 
 await app.register(assessmentRoutes, { prefix: "/api" });
 await app.register(adminRoutes, { prefix: "/api" });
+
+// Serve the client app at the root so the Render URL works for testers.
+app.get("/", async (request, reply) => {
+  return serveHtml(reply, indexPath);
+});
+
+app.get("/index.html", async (request, reply) => {
+  return serveHtml(reply, indexPath);
+});
+
+app.get("/keccak", async (request, reply) => {
+  return serveHtml(reply, keccakPath);
+});
+
+app.get("/keccak-model.html", async (request, reply) => {
+  return serveHtml(reply, keccakPath);
+});
 
 app.setErrorHandler((err, request, reply) => {
   request.log.error(err);
