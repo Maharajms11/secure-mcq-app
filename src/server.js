@@ -15,7 +15,6 @@ const app = Fastify({ logger: true });
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const indexPath = path.resolve(__dirname, "../index.html");
-const keccakPath = path.resolve(__dirname, "../keccak-model.html");
 
 async function serveHtml(reply, filePath) {
   const html = await fs.readFile(filePath, "utf8");
@@ -37,14 +36,6 @@ app.get("/", async (request, reply) => {
 
 app.get("/index.html", async (request, reply) => {
   return serveHtml(reply, indexPath);
-});
-
-app.get("/keccak", async (request, reply) => {
-  return serveHtml(reply, keccakPath);
-});
-
-app.get("/keccak-model.html", async (request, reply) => {
-  return serveHtml(reply, keccakPath);
 });
 
 app.setErrorHandler((err, request, reply) => {
