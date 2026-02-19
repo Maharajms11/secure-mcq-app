@@ -298,6 +298,33 @@
         line-height: 1.45;
       }
 
+      .pedantic {
+        margin-top: 12px;
+        border: 1px solid #c7d1e2;
+        border-radius: 12px;
+        padding: 10px;
+        background: #f5f8ff;
+      }
+
+      .pedantic p {
+        margin: 6px 0;
+      }
+
+      .pedantic ul {
+        margin: 6px 0;
+        padding-left: 18px;
+      }
+
+      .pedantic li {
+        margin-bottom: 4px;
+      }
+
+      .metric-row {
+        display: grid;
+        grid-template-columns: 1fr;
+        gap: 3px;
+      }
+
       .small {
         font-size: 0.82rem;
       }
@@ -378,8 +405,8 @@
 
           <div class="slider-wrap">
             <div class="actions">
-              <button id="prevBtn">Prev</button>
-              <button id="nextBtn">Next</button>
+              <button id="prevBtn">Prev Step</button>
+              <button id="nextBtn">Next Step</button>
               <button id="playBtn">Play</button>
             </div>
             <input id="stepSlider" type="range" min="0" max="0" value="0" />
@@ -425,6 +452,16 @@
 
           <div id="laneDetail" class="lane-detail small"></div>
           <p id="stageExplain" class="note small"></p>
+
+          <div class="pedantic small">
+            <p><strong>Pedantic walkthrough:</strong> <span id="pedanticMain"></span></p>
+            <div class="metric-row">
+              <p><strong>Formula:</strong> <span id="pedanticFormula" class="mono"></span></p>
+              <p><strong>Changed lanes:</strong> <span id="changedCount"></span></p>
+              <p><strong>Changed coordinates:</strong> <span id="changedCoords" class="mono"></span></p>
+            </div>
+            <ul id="pedanticList"></ul>
+          </div>
         </section>
       </main>
     </div>
@@ -453,14 +490,25 @@
       ];
 
       const STAGE_TEXT = {
-        init: "The 1600-bit state starts at zero.",
-        absorb: "Current message block bytes are XORed into the rate portion of the state.",
-        start: "Beginning of this round before the four step mappings.",
-        theta: "theta mixes each lane with column parities, spreading local changes globally.",
-        rhoPi: "rho rotates each lane; pi moves lanes to new coordinates.",
-        chi: "chi is the only non-linear step and mixes bits row-wise.",
-        iota: "iota XORs a round constant into A[0,0] to break symmetry.",
-        squeeze: "Output bytes are read from rate lanes. More output requires another permutation."
+        init: "State initialization: all 25 lanes A[x,y] are set to 0 before any input touches the sponge.",
+        absorb: "Absorb phase: one message block is XORed into only the rate lanes, then a full permutation is applied.",
+        start: "Round start: this is the state entering the current Keccak-f round before theta.",
+        theta: "theta: compute column parities C[x], derive D[x], then XOR D[x] into every lane of column x.",
+        rhoPi: "rho/pi: rotate each lane by a fixed offset (rho), then move lanes to new coordinates (pi).",
+        chi: "chi: row-wise non-linear mixing using NOT and AND with neighboring lanes.",
+        iota: "iota: inject round constant RC into lane A[0,0] to remove symmetry across rounds.",
+        squeeze: "Squeeze phase: output bytes are read from the rate portion; if more output is needed, permute again."
+      };
+
+      const STAGE_FORMULA = {
+        init: "A[x,y] <- 0",
+        absorb: "A_rate <- A_rate XOR block",
+        start: "Round r starts with current A",
+        theta: "C[x]=A[x,0]^...^A[x,4]; D[x]=C[x-1]^ROT(C[x+1],1); A[x,y]=A[x,y]^D[x]",
+        rhoPi: "B[y,(2x+3y) mod 5]=ROT(A[x,y],r[x,y]); A[x,y]=B[x,y]",
+        chi: "A[x,y]=B[x,y] ^ ((~B[x+1,y]) & B[x+2,y])",
+        iota: "A[0,0]=A[0,0] ^ RC[r]",
+        squeeze: "Z <- first rate bytes of A"
       };
 
       const ui = {
@@ -495,7 +543,12 @@
         boxSqueeze: document.getElementById("boxSqueeze"),
         laneGrid: document.getElementById("laneGrid"),
         laneDetail: document.getElementById("laneDetail"),
-        stageExplain: document.getElementById("stageExplain")
+        stageExplain: document.getElementById("stageExplain"),
+        pedanticMain: document.getElementById("pedanticMain"),
+        pedanticFormula: document.getElementById("pedanticFormula"),
+        changedCount: document.getElementById("changedCount"),
+        changedCoords: document.getElementById("changedCoords"),
+        pedanticList: document.getElementById("pedanticList")
       };
 
       const appState = {
@@ -525,6 +578,8 @@
       function addTrace(trace, state, meta) {
         trace.push({
           ...meta,
+          formula: meta.formula || STAGE_FORMULA[meta.stage] || "",
+          details: Array.isArray(meta.details) ? meta.details : [],
           state: cloneState(state)
         });
       }
@@ -543,15 +598,22 @@
             state[x][y] = (state[x][y] ^ d[x]) & LANE_MASK;
           }
         }
+        return { c, d };
       }
 
       function rhoPi(state) {
         const b = createState();
+        const sampleMoves = [];
         for (let x = 0; x < 5; x += 1) {
           for (let y = 0; y < 5; y += 1) {
             const newX = y;
             const newY = (2 * x + 3 * y) % 5;
             b[newX][newY] = rotl64(state[x][y], ROTATION[x][y]);
+            if (sampleMoves.length < 6) {
+              sampleMoves.push(
+                `A[${x},${y}] -> B[${newX},${newY}] rot ${ROTATION[x][y]}`
+              );
+            }
           }
         }
         for (let x = 0; x < 5; x += 1) {
@@ -559,10 +621,12 @@
             state[x][y] = b[x][y];
           }
         }
+        return { sampleMoves };
       }
 
       function chi(state) {
         const b = cloneState(state);
+        const row0Before = Array.from({ length: 5 }, (_, x) => b[x][0]);
         for (let x = 0; x < 5; x += 1) {
           for (let y = 0; y < 5; y += 1) {
             const next = b[(x + 1) % 5][y];
@@ -570,10 +634,14 @@
             state[x][y] = (b[x][y] ^ ((~next & LANE_MASK) & next2)) & LANE_MASK;
           }
         }
+        const row0After = Array.from({ length: 5 }, (_, x) => state[x][0]);
+        return { row0Before, row0After };
       }
 
       function iota(state, roundIndex) {
-        state[0][0] = (state[0][0] ^ ROUND_CONSTANTS[roundIndex]) & LANE_MASK;
+        const constant = ROUND_CONSTANTS[roundIndex];
+        state[0][0] = (state[0][0] ^ constant) & LANE_MASK;
+        return { constant };
       }
 
       function keccakF1600(state, rounds, trace, contextLabel) {
@@ -584,49 +652,82 @@
             stage: "start",
             round: round + 1,
             title: `${contextLabel}: round ${round + 1} start`,
-            subtitle: "Round enters theta."
+            subtitle: "Round enters theta.",
+            details: [
+              `This round index is ${round + 1} of 24 (Keccak-f[1600] uses 24 fixed rounds).`,
+              "No transformation has run yet for this round.",
+              "Next operation is theta, which uses column parity."
+            ]
           });
 
-          theta(state);
+          const thetaInfo = theta(state);
           addTrace(trace, state, {
             phase: "permute",
             stage: "theta",
             round: round + 1,
             title: `${contextLabel}: round ${round + 1} after theta`,
-            subtitle: "Column parity diffusion."
+            subtitle: "Column parity diffusion.",
+            details: [
+              `C values: ${thetaInfo.c.map((v) => laneHex(v)).join(" | ")}`,
+              `D values: ${thetaInfo.d.map((v) => laneHex(v)).join(" | ")}`,
+              "Every lane in column x is XORed with the same D[x]."
+            ]
           });
 
-          rhoPi(state);
+          const rhoPiInfo = rhoPi(state);
           addTrace(trace, state, {
             phase: "permute",
             stage: "rhoPi",
             round: round + 1,
             title: `${contextLabel}: round ${round + 1} after rho/pi`,
-            subtitle: "Bit rotations and lane relocation."
+            subtitle: "Bit rotations and lane relocation.",
+            details: [
+              "rho rotates bits within each 64-bit lane by a lane-specific offset.",
+              "pi moves each lane to a new coordinate.",
+              `Sample moves: ${rhoPiInfo.sampleMoves.join(" ; ")}`
+            ]
           });
 
-          chi(state);
+          const chiInfo = chi(state);
           addTrace(trace, state, {
             phase: "permute",
             stage: "chi",
             round: round + 1,
             title: `${contextLabel}: round ${round + 1} after chi`,
-            subtitle: "Non-linear row mixing."
+            subtitle: "Non-linear row mixing.",
+            details: [
+              "chi processes one row at a time and is the non-linear step.",
+              `Row y=0 before: ${chiInfo.row0Before.map((v) => laneHex(v)).join(" | ")}`,
+              `Row y=0 after: ${chiInfo.row0After.map((v) => laneHex(v)).join(" | ")}`
+            ]
           });
 
-          iota(state, round);
+          const iotaInfo = iota(state, round);
           addTrace(trace, state, {
             phase: "permute",
             stage: "iota",
             round: round + 1,
             title: `${contextLabel}: round ${round + 1} after iota`,
-            subtitle: "Round constant injected into lane A[0,0]."
+            subtitle: "Round constant injected into lane A[0,0].",
+            details: [
+              `Round constant RC[${round + 1}] = ${laneHex(iotaInfo.constant)}`,
+              "Only lane A[0,0] is directly XORed in this step.",
+              "The constant prevents symmetric round behavior."
+            ]
           });
         }
       }
 
       function bytesToHex(bytes) {
         return bytes.map((v) => v.toString(16).padStart(2, "0")).join("");
+      }
+
+      function previewHex(bytes, maxChars = 96) {
+        const hex = bytesToHex(bytes);
+        if (hex.length <= maxChars) {
+          return hex || "(empty)";
+        }
+        return `${hex.slice(0, maxChars)}...`;
       }
 
       function parseHexByte(value) {
@@ -692,7 +793,12 @@
           stage: "init",
           round: null,
           title: "Initial state",
-          subtitle: "All 25 lanes are zero."
+          subtitle: "All 25 lanes are zero.",
+          details: [
+            "Keccak-f[1600] state is a 5x5 matrix of 64-bit lanes.",
+            `Rate = ${cfg.rateBits} bits, capacity = ${cfg.capacityBits} bits.`,
+            "No message material has been absorbed yet."
+          ]
         });
 
         const blockCount = Math.ceil(padded.length / cfg.rateBytes);
@@ -705,7 +811,12 @@
             stage: "absorb",
             round: null,
             title: `Absorb block ${blockIndex + 1}/${blockCount}`,
-            subtitle: "Block bytes are XORed into the rate portion."
+            subtitle: "Block bytes are XORed into the rate portion.",
+            details: [
+              `Block preview (hex): ${previewHex(block)}`,
+              `Exactly ${cfg.rateBytes} byte(s) map into rate lanes.`,
+              `Capacity (${cfg.capacityBits} bits) is not directly modified in absorb.`
+            ]
           });
 
           keccakF1600(state, cfg.rounds, trace, `Block ${blockIndex + 1}`);
@@ -723,7 +834,14 @@
             stage: "squeeze",
             round: null,
             title: `Squeeze chunk ${squeezeChunk}`,
-            subtitle: `Read ${toTake} byte(s) from rate lanes.`
+            subtitle: `Read ${toTake} byte(s) from rate lanes.`,
+            details: [
+              `Read window size: ${cfg.rateBytes} bytes from rate section.`,
+              `Bytes emitted this chunk: ${toTake}.`,
+              output.length < cfg.outputBytes
+                ? "Digest not complete yet, another permutation is required."
+                : "Digest complete for requested output size."
+            ]
           });
 
           if (output.length < cfg.outputBytes) {
@@ -810,6 +928,21 @@
         return 0;
       }
 
+      function diffSummary(prevState, currentState) {
+        if (!prevState) {
+          return { count: 0, coords: [] };
+        }
+        const coords = [];
+        for (let y = 0; y < 5; y += 1) {
+          for (let x = 0; x < 5; x += 1) {
+            if (prevState[x][y] !== currentState[x][y]) {
+              coords.push(`A[${x},${y}]`);
+            }
+          }
+        }
+        return { count: coords.length, coords };
+      }
+
       function renderSponge(phase) {
         const boxes = [
           { el: ui.boxAbsorb, phase: "absorb" },
@@ -860,9 +993,14 @@
 
       function renderLaneDetail() {
         const current = appState.trace[appState.step];
+        const prev = appState.step > 0 ? appState.trace[appState.step - 1] : null;
         const value = current.state[appState.selectedX][appState.selectedY];
+        const changed = prev
+          ? prev.state[appState.selectedX][appState.selectedY] !== value
+          : false;
         ui.laneDetail.innerHTML = `
           <p><strong>Selected lane:</strong> A[${appState.selectedX},${appState.selectedY}]</p>
+          <p><strong>Changed this step:</strong> ${changed ? "yes" : "no"}</p>
           <p><strong>Hex:</strong> <span class="mono">${laneHex(value)}</span></p>
           <p><strong>Binary:</strong> <span class="mono">${laneBits(value)}</span></p>
           <p><strong>Decimal:</strong> <span class="mono">${value.toString(10)}</span></p>
@@ -871,6 +1009,11 @@
 
       function renderStepMeta() {
         const item = appState.trace[appState.step];
+        const prev = appState.step > 0 ? appState.trace[appState.step - 1] : null;
+        const delta = diffSummary(prev ? prev.state : null, item.state);
+        const shownCoords = delta.coords.slice(0, 10);
+        const hiddenCount = Math.max(0, delta.coords.length - shownCoords.length);
+
         ui.stepNow.textContent = String(appState.step);
         ui.stepMax.textContent = String(appState.trace.length - 1);
         ui.stepTitle.textContent = item.title;
@@ -879,6 +1022,25 @@
         ui.stageBadge.textContent = `stage: ${item.stage}`;
         ui.roundBadge.textContent = item.round ? `round: ${item.round}` : "round: -";
         ui.stageExplain.textContent = STAGE_TEXT[item.stage] || "";
+        ui.pedanticMain.textContent = STAGE_TEXT[item.stage] || "";
+        ui.pedanticFormula.textContent = item.formula || STAGE_FORMULA[item.stage] || "-";
+        ui.changedCount.textContent = `${delta.count} / 25 lanes`;
+        ui.changedCoords.textContent = delta.coords.length
+          ? hiddenCount > 0
+            ? `${shownCoords.join(", ")}, +${hiddenCount} more`
+            : shownCoords.join(", ")
+          : "none";
+        ui.pedanticList.innerHTML = "";
+        for (const detail of item.details) {
+          const li = document.createElement("li");
+          li.textContent = detail;
+          ui.pedanticList.appendChild(li);
+        }
+        if (!item.details.length) {
+          const li = document.createElement("li");
+          li.textContent = "No additional details for this step.";
+          ui.pedanticList.appendChild(li);
+        }
         renderSponge(item.phase);
       }
 
@@ -888,6 +1050,12 @@
           ui.stepSub.textContent = "";
           ui.laneGrid.innerHTML = "";
           ui.laneDetail.textContent = "";
+          ui.stageExplain.textContent = "";
+          ui.pedanticMain.textContent = "";
+          ui.pedanticFormula.textContent = "";
+          ui.changedCount.textContent = "0 / 25 lanes";
+          ui.changedCoords.textContent = "none";
+          ui.pedanticList.innerHTML = "";
           return;
         }
         ui.stepSlider.max = String(appState.trace.length - 1);
@@ -966,7 +1134,7 @@
           return;
         }
         ui.playBtn.textContent = "Pause";
-        appState.timer = setInterval(nextStep, 750);
+        appState.timer = setInterval(nextStep, 1500);
       });
 
       ui.stepSlider.addEventListener("input", (event) => {
